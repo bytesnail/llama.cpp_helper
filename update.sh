@@ -43,7 +43,7 @@ show_help() {
 示例:
   bash update.sh                    # 更新到最新 release
   bash update.sh b3631              # 更新到指定 commit
-  bash update.sh v0.0.1             # 更新到指定标签
+  bash update.sh b8941              # 更新到指定标签
   bash update.sh --help             # 显示帮助
 EOF
 }
@@ -64,6 +64,36 @@ rollback() {
     # 恢复子模块到与主仓库一致的状态
     git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
     llama_info "已回滚到 ${CURRENT_SHORT}"
+}
+
+# 清理旧版本残留的子模块目录
+# git checkout 不会自动删除旧版本中已 init 但新版本不再追踪的子模块工作目录
+# 扫描工作目录中的 .git gitlink 文件，对比当前索引中的 submodule 路径，找出残留
+cleanup_stale_submodules() {
+    local -A expected_paths
+    while IFS= read -r path; do
+        expected_paths["$path"]=1
+    done < <(git -C "$LLAMA_CPP_SRC" ls-files --stage | grep '^160000' | awk '{print $NF}')
+
+    local stale_count=0
+    local gitlink mod_dir
+    while IFS= read -r gitlink; do
+        mod_dir="$(dirname "$gitlink")"
+        # 跳过当前版本仍在追踪的 submodule
+        if [[ -n "${expected_paths[$mod_dir]}" ]]; then
+            continue
+        fi
+        # 确认是 submodule 的 gitlink 文件（内容为 gitdir:...）
+        if grep -q '^gitdir:' "$gitlink" 2>/dev/null; then
+            llama_info "清理旧子模块残留: ${mod_dir}"
+            rm -rf "$gitlink" "${LLAMA_CPP_SRC}/${mod_dir}"
+            ((stale_count++)) || true
+        fi
+    done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print | sed "s|^${LLAMA_CPP_SRC}/||")
+
+    if [[ "$stale_count" -gt 0 ]]; then
+        llama_ok "旧子模块清理完成 (${stale_count} 个)"
+    fi
 }
 
 # 检查当前构建是否完整可用
@@ -305,38 +335,8 @@ if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
     fi
 
     llama_ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
-# 清理旧版本残留的子模块目录
-# git checkout 不会自动删除旧版本中已 init 但新版本不再追踪的子模块工作目录
-# 扫描工作目录中的 .git gitlink 文件，对比当前索引中的 submodule 路径，找出残留
-cleanup_stale_submodules() {
-    local -A expected_paths
-    while IFS= read -r path; do
-        expected_paths["$path"]=1
-    done < <(git ls-files --stage | grep '^160000' | awk '{print $NF}')
-
-    local stale_count=0
-    while IFS= read -r gitlink; do
-        local mod_dir="$(dirname "$gitlink")"
-        # 跳过当前版本仍在追踪的 submodule
-        if [[ -n "${expected_paths[$mod_dir]}" ]]; then
-            continue
-        fi
-        # 确认是 submodule 的 gitlink 文件（内容为 gitdir:...）
-        if grep -q '^gitdir:' "$gitlink" 2>/dev/null; then
-            llama_info "清理旧子模块残留: ${mod_dir}"
-            rm -rf "$mod_dir"
-            ((stale_count++)) || true
-        fi
-    done < <(find . -path './build' -prune -o -path './.git' -prune -o -type f -name '.git' -print | sed 's|^\./||')
-
-    if [[ "$stale_count" -gt 0 ]]; then
-        llama_ok "旧子模块清理完成 (${stale_count} 个)"
-    fi
-}
-
-# 在需要的地方调用函数
-cleanup_stale_submodules
-
+    # 清理旧版本残留的子模块目录
+    cleanup_stale_submodules
 
     # 同步当前版本的子模块
     llama_info "同步子模块..."

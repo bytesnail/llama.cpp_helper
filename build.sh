@@ -106,7 +106,7 @@ llama_detail "C++ 编译器: $GXX_PATH"
 #    执行完整构建（bash build.sh），若链接阶段无 "libcudart.so.* not found" 错误，
 #    即说明 llama.cpp 已自行解决此问题，可安全移除。
 if command -v nvcc &>/dev/null; then
-    _NVCC_DIR=$(dirname $(dirname $(readlink -f $(which nvcc))))
+    _NVCC_DIR=$(dirname "$(dirname "$(readlink -f "$(which nvcc)")")")
     # 优先使用标准 CUDA 目录结构推断
     CUDA_LIB_DIR="$_NVCC_DIR/targets/x86_64-linux/lib"
     if [[ ! -d "$CUDA_LIB_DIR" ]]; then
@@ -248,14 +248,18 @@ fi
 
 # 检查可用设备 (llama-bench --help 会触发 CUDA 初始化并打印设备信息)
 llama_info "可用设备："
-BENCH_OUTPUT=$("${BIN_DIR}/llama-bench" --help 2>&1 || true)
-if echo "$BENCH_OUTPUT" | grep -q "found [0-9]* CUDA devices"; then
-    echo "$BENCH_OUTPUT" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
-        llama_detail "$line"
-    done
-    llama_ok "CUDA 设备检测完成"
+if [[ -x "${BIN_DIR}/llama-bench" ]]; then
+    BENCH_OUTPUT=$("${BIN_DIR}/llama-bench" --help 2>&1 || true)
+    if echo "$BENCH_OUTPUT" | grep -q "found [0-9]* CUDA devices"; then
+        echo "$BENCH_OUTPUT" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        llama_ok "CUDA 设备检测完成"
+    else
+        llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
+    fi
 else
-    llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
+    llama_warn "未找到 llama-bench，跳过设备检测"
 fi
 
 # 验证 OpenBLAS 运行时可用性

@@ -70,17 +70,17 @@ bash build.sh --help
 
 #### `update.sh` - 更新到最新版本
 
-查询 GitHub 最新 release，自动拉取、切换、同步子模块并重新构建。
+查询 GitHub 最新构建标签（build tag），自动拉取、切换、同步子模块并重新构建。
 
 ```bash
-# 更新到最新 release
+# 更新到最新构建标签
 bash update.sh
 
 # 更新到指定 commit
 bash update.sh b3631
 
 # 更新到指定标签
-bash update.sh v0.0.1
+bash update.sh b8941
 
 # 显示帮助
 bash update.sh --help

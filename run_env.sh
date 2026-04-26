@@ -23,6 +23,14 @@ fi
 source "${SCRIPT_DIR}/common.sh"
 unset SCRIPT_DIR _SCRIPT_PATH
 
+# --- 环境变量定义 --------------------------------------------
+# 使用关联数组定义所有要设置的环境变量
+# 格式: [变量名]="值|描述"
+declare -A LLAMA_ENV_VARS=(
+    ["GGML_CUDA_P2P"]="1|启用 GPU 间 P2P 直传（NVLink）"
+    ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
+)
+
 # --- 帮助信息 ------------------------------------------------
 show_help() {
     cat <<EOF
@@ -63,13 +71,6 @@ show_env_vars() {
 
 # --- 主函数 --------------------------------------------------
 main() {
-    # 使用关联数组定义所有要设置的环境变量
-    # 格式: [变量名]="值|描述"
-    local -A LLAMA_ENV_VARS=(
-        ["GGML_CUDA_P2P"]="1|启用 GPU 间 P2P 直传（NVLink）"
-        ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
-    )
-
     local SHOW_STATUS=0
     if (($# > 0)); then
         case "$1" in

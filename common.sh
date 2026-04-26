@@ -5,7 +5,7 @@
 # ============================================================
 
 # --- Safety --------------------------------------------------
-# Only enable strict mode if not being sourced for interactive use
+# Only enable strict mode when executed directly (not when sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set -euo pipefail
 fi
