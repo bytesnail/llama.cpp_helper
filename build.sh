@@ -94,6 +94,39 @@ GXX_PATH=$(command -v g++)
 llama_detail "C 编译器: $GCC_PATH"
 llama_detail "C++ 编译器: $GXX_PATH"
 
+# 自动检测 CUDA 库路径（用于 RPATH）
+# 背景：b8940 起 llama.cpp 将 CUDA 后端拆分为独立的 libggml-cuda.so，
+# 且 CUDA 依赖声明为 PRIVATE，不会通过 CMake 传播到最终可执行文件。
+# 当 CUDA 安装在非标准路径（如 Anaconda）时，链接器无法找到 libcudart.so / libcublas.so。
+# 此处通过 CMAKE_BUILD_RPATH 将 CUDA 库目录加入链接器搜索路径。
+#
+# ⚠️ 这是临时方案。如果未来 llama.cpp 在 CMake 中自行处理了 CUDA 库的 RPATH
+#    （例如将 PRIVATE 改为 PUBLIC，或显式设置 RPATH），则此处不再需要。
+#    验证方法：更新 llama.cpp 后，删除此处 CUDA_LIB_DIR 检测和 CMAKE_BUILD_RPATH，
+#    执行完整构建（bash build.sh），若链接阶段无 "libcudart.so.* not found" 错误，
+#    即说明 llama.cpp 已自行解决此问题，可安全移除。
+if command -v nvcc &>/dev/null; then
+    _NVCC_DIR=$(dirname $(dirname $(readlink -f $(which nvcc))))
+    # 优先使用标准 CUDA 目录结构推断
+    CUDA_LIB_DIR="$_NVCC_DIR/targets/x86_64-linux/lib"
+    if [[ ! -d "$CUDA_LIB_DIR" ]]; then
+        # 回退：从 libcudart.so 位置反推
+        _CUDA_RT=$(find "$_NVCC_DIR" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
+        if [[ -n "$_CUDA_RT" ]]; then
+            CUDA_LIB_DIR=$(dirname "$(readlink -f "$_CUDA_RT")")
+        fi
+    fi
+    if [[ -n "$CUDA_LIB_DIR" && -d "$CUDA_LIB_DIR" ]]; then
+        llama_detail "CUDA 库路径: $CUDA_LIB_DIR"
+    else
+        llama_warn "无法自动检测 CUDA 库路径，构建可能失败"
+        CUDA_LIB_DIR=""
+    fi
+    unset _NVCC_DIR _CUDA_RT
+else
+    CUDA_LIB_DIR=""
+fi
+
 # --- 步骤 1：清理旧构建 --------------------------------------
 if [[ "$INCREMENTAL" -eq 0 ]]; then
     llama_step "步骤 1/4：清理旧构建"
@@ -112,11 +145,19 @@ llama_step "步骤 2/4：CMake 配置"
 llama_info "运行 CMake 配置..."
 
 set +e
+# 条件性添加 CUDA 库 RPATH（仅当 CUDA_LIB_DIR 非空时）
+if [[ -n "$CUDA_LIB_DIR" ]]; then
+    CMAKE_EXTRA_ARGS=("-DCMAKE_BUILD_RPATH=$CUDA_LIB_DIR")
+else
+    CMAKE_EXTRA_ARGS=()
+fi
+
 cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_C_COMPILER="$GCC_PATH" \
     -DCMAKE_CXX_COMPILER="$GXX_PATH" \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLAMA_BUILD_TESTS=OFF \
+    -DLLAMA_BUILD_EXAMPLES=OFF \
     -DGGML_NATIVE=ON \
     -DGGML_BLAS=ON \
     -DGGML_BLAS_VENDOR=OpenBLAS \
@@ -125,7 +166,8 @@ cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_CUDA_ARCHITECTURES="75" \
     -DCMAKE_CUDA_FLAGS="--threads=0" \
     -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
-    -DGGML_CUDA_FA_ALL_QUANTS=ON
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    "${CMAKE_EXTRA_ARGS[@]}"
 
 CMAKE_EXIT=$?
 set -e
