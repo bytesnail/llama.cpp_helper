@@ -277,5 +277,8 @@ if [[ "$ERRORS" -gt 0 ]]; then
     exit 1
 fi
 
+# 写入构建标记（用于 update.sh 验证构建是否与源码匹配）
+git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || true
+
 echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BIN_DIR}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BIN_DIR}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
 

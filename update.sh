@@ -59,11 +59,39 @@ save_state() {
 
 # 回滚到之前的状态
 rollback() {
-    llama_warn "构建失败，正在回滚到之前的版本..."
+    llama_warn "正在回滚到之前的版本..."
     git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || true
     # 恢复子模块到与主仓库一致的状态
     git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
     llama_info "已回滚到 ${CURRENT_SHORT}"
+}
+
+# 检查当前构建是否完整可用
+# 返回 0 = 构建完整，1 = 构建缺失或不完整
+check_build_health() {
+    local bin_dir="${LLAMA_CPP_SRC}/build/bin"
+    if [[ ! -d "$bin_dir" ]]; then
+        return 1
+    fi
+    # 检查关键二进制文件是否存在且可执行
+    for binary in llama-cli llama-server; do
+        if [[ ! -x "${bin_dir}/${binary}" ]]; then
+            return 1
+        fi
+    done
+    # 检查构建标记文件是否存在且与当前源码 commit 匹配
+    local build_stamp="${LLAMA_CPP_SRC}/build/.build-stamp"
+    local current_head
+    current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
+    if [[ -f "$build_stamp" ]]; then
+        local stamped_head
+        stamped_head=$(cat "$build_stamp" 2>/dev/null || echo "")
+        if [[ "$stamped_head" == "$current_head" ]]; then
+            return 0
+        fi
+    fi
+    # 没有标记文件或不匹配，说明 build 目录可能来自其他版本
+    return 1
 }
 
 # --- GitHub API 查询 -----------------------------------------
@@ -218,70 +246,87 @@ fi
 
 # 版本对比
 llama_info "对比版本..."
-
+NEED_SOURCE_UPDATE=1
 if [[ "${CURRENT_TAG}" = "${RELEASE_TAG}" ]]; then
-    llama_ok "本地已在该版本 (${RELEASE_TAG})，无需更新！"
-    exit 0
+    llama_ok "本地已在该版本 (${RELEASE_TAG})，无需更新源码"
+    NEED_SOURCE_UPDATE=0
+elif is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$CURRENT_COMMIT" = "$RELEASE_COMMIT" ]]; then
+    llama_ok "本地已是最新 commit (${RELEASE_SHORT})，无需更新源码"
+    NEED_SOURCE_UPDATE=0
 fi
 
-if is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$CURRENT_COMMIT" = "$RELEASE_COMMIT" ]]; then
-    llama_ok "本地已是最新 commit (${RELEASE_SHORT})，无需更新！"
-    exit 0
+if [[ "$NEED_SOURCE_UPDATE" -eq 0 ]]; then
+    # 源码无需更新，检查构建是否完整
+    if check_build_health; then
+        llama_ok "当前构建完整且与源码匹配，无需任何操作！"
+        exit 0
+    else
+        llama_warn "当前构建缺失或与源码不匹配，需要重新构建"
+        # 跳过源码更新，直接进入构建阶段
+        ACTUAL_COMMIT="$CURRENT_COMMIT"
+        ACTUAL_TAG="$CURRENT_TAG"
+        RELEASE_TAG="${CURRENT_TAG}"
+    fi
+else
+    llama_warn "需要更新: ${CURRENT_SHORT} (${CURRENT_TAG}) → ${RELEASE_TAG}"
 fi
+if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
+    # 拉取并切换
+    llama_info "正在从远程仓库拉取最新引用..."
 
-llama_warn "需要更新: ${CURRENT_SHORT} (${CURRENT_TAG}) → ${RELEASE_TAG}"
+    git fetch origin --quiet --tags
 
-# 拉取并切换
-llama_info "正在从远程仓库拉取最新引用..."
+    # 尝试 fetch 特定标签（如果是标签的话）
+    if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "."; then
+        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
+    fi
 
-git fetch origin --quiet --tags
-
-# 尝试 fetch 特定标签（如果是标签的话）
-if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "."; then
-    git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
-fi
-
-if ! git rev-parse --verify "${RELEASE_TAG}^{commit}" &>/dev/null; then
-    llama_err "本地找不到目标版本: ${RELEASE_TAG}"
-    llama_detail "请确认版本号正确，或检查网络连接"
-    exit 1
-fi
-
-llama_info "切换到版本 ${RELEASE_TAG}..."
-
-git checkout "${RELEASE_TAG}" --quiet
-
-ACTUAL_COMMIT=$(git rev-parse HEAD)
-ACTUAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
-
-if [[ -n "$ACTUAL_TAG" && "$ACTUAL_TAG" != "$RELEASE_TAG" ]]; then
-    llama_warn "checkout 后标签不一致 (期望: ${RELEASE_TAG}, 实际: ${ACTUAL_TAG})"
-fi
-
-if is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$ACTUAL_COMMIT" != "$RELEASE_COMMIT" ]]; then
-    llama_warn "checkout commit (${ACTUAL_COMMIT:0:7}) 与 API 返回的 commitish (${RELEASE_SHORT}) 不一致"
-    llama_warn "但标签 ${RELEASE_TAG} 已确认 checkout 成功，继续构建..."
-fi
-
-llama_ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
-
-# 同步子模块
-llama_info "同步子模块..."
-if [[ -f ".gitmodules" ]]; then
-    if ! git submodule update --init --recursive --quiet; then
-        llama_err "子模块同步失败"
-        rollback
+    if ! git rev-parse --verify "${RELEASE_TAG}^{commit}" &>/dev/null; then
+        llama_err "本地找不到目标版本: ${RELEASE_TAG}"
+        llama_detail "请确认版本号正确，或检查网络连接"
         exit 1
     fi
-    llama_ok "子模块已同步"
-else
-    llama_info "当前版本无子模块，跳过"
+
+    llama_info "切换到版本 ${RELEASE_TAG}..."
+
+    git checkout "${RELEASE_TAG}" --quiet
+
+    ACTUAL_COMMIT=$(git rev-parse HEAD)
+    ACTUAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+
+    if [[ -n "$ACTUAL_TAG" && "$ACTUAL_TAG" != "$RELEASE_TAG" ]]; then
+        llama_warn "checkout 后标签不一致 (期望: ${RELEASE_TAG}, 实际: ${ACTUAL_TAG})"
+    fi
+
+    if is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$ACTUAL_COMMIT" != "$RELEASE_COMMIT" ]]; then
+        llama_warn "checkout commit (${ACTUAL_COMMIT:0:7}) 与 API 返回的 commitish (${RELEASE_SHORT}) 不一致"
+        llama_warn "但标签 ${RELEASE_TAG} 已确认 checkout 成功，继续构建..."
+    fi
+
+    llama_ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
+
+    # 同步子模块
+    llama_info "同步子模块..."
+    if [[ -f ".gitmodules" ]]; then
+        if ! git submodule update --init --recursive --quiet; then
+            llama_err "子模块同步失败"
+            rollback
+            exit 1
+        fi
+        llama_ok "子模块已同步"
+    else
+        llama_info "当前版本无子模块，跳过"
+    fi
 fi
 
-# 构建（带失败回滚）
+# 构建（带失败回滚 + 回滚后重新构建）
 echo ""
 echo "=========================================="
-echo "  源码更新完成，开始构建..."
+if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
+    echo "  源码更新完成，开始构建..."
+else
+    echo "  开始重新构建..."
+fi
 echo "=========================================="
 echo ""
 
@@ -292,22 +337,53 @@ set -e
 
 if [[ "$BUILD_STATUS" -ne 0 ]]; then
     rollback
-    llama_err "构建失败，已回滚到 ${CURRENT_SHORT}"
+    llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
+    echo ""
+    echo "=========================================="
+    echo "  回滚后重新构建..."
+    echo "=========================================="
+    echo ""
+    set +e
+    bash "$BUILD_SCRIPT"
+    ROLLBACK_BUILD_STATUS=$?
+    set -e
+    if [[ "$ROLLBACK_BUILD_STATUS" -ne 0 ]]; then
+        llama_err "回滚后构建也失败，请手动检查"
+        exit 1
+    fi
+    llama_warn "更新失败但已回滚并重新构建成功"
+    echo ""
+    echo "=========================================="
+    echo "  回滚并重新构建完成"
+    echo "=========================================="
+    echo ""
+    echo "  当前版本: ${CURRENT_SHORT} (${CURRENT_TAG})"
+    echo "  目标版本: ${RELEASE_TAG} (构建失败，已回滚)"
+    echo ""
+    echo "运行示例:"
+    echo "  source ${SCRIPT_DIR}/run_env.sh"
+    echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
+    echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
     exit 1
 fi
 
+# 构建成功
 echo ""
 echo "=========================================="
 echo "  llama.cpp 更新并构建完成！"
 echo "=========================================="
 echo ""
-echo "  更新: ${CURRENT_SHORT} → ${ACTUAL_COMMIT:0:7}"
-echo "  版本: ${RELEASE_TAG}"
-if [[ -n "$RELEASE_DATE" ]]; then
-    echo "  发布: ${RELEASE_DATE}"
+if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
+    echo "  更新: ${CURRENT_SHORT} → ${ACTUAL_COMMIT:0:7}"
+    echo "  版本: ${RELEASE_TAG}"
+    if [[ -n "$RELEASE_DATE" ]]; then
+        echo "  发布: ${RELEASE_DATE}"
+    fi
+else
+    echo "  版本: ${CURRENT_TAG} (${CURRENT_SHORT})"
+    echo "  状态: 重新构建完成"
 fi
 echo ""
 echo "运行示例:"
 echo "  source ${SCRIPT_DIR}/run_env.sh"
 echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
-echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
