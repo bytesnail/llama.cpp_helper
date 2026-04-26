@@ -1,208 +1,300 @@
 #!/bin/bash
+# ============================================================
+# llama.cpp 一键更新脚本
+# 功能：查询 GitHub 最新 release → 拉取 → 构建
+# 用法：cd /mnt/hdd/projects/llama.cpp_helper && bash update.sh [tag|commit]
+# ============================================================
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/common.sh"
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
+
 BUILD_SCRIPT="${SCRIPT_DIR}/build.sh"
-REPO="ggml-org/llama.cpp"
-REPO_URL="https://github.com/ggml-org/llama.cpp"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-
+# --- 状态变量 ------------------------------------------------
 RELEASE_TAG=""
 RELEASE_COMMIT=""
 RELEASE_DATE=""
 RELEASE_URL=""
+CURRENT_COMMIT=""
+CURRENT_SHORT=""
+CURRENT_TAG=""
 
-is_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
+# --- 帮助信息 ------------------------------------------------
+show_help() {
+    cat <<EOF
+用法: $(basename "$0") [tag|commit]
 
+描述:
+  将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。
+
+参数:
+  tag|commit    可选。指定要更新到的标签或 commit SHA。
+                如果不提供，自动查询 GitHub 最新 release。
+
+选项:
+  -h, --help    显示此帮助信息
+
+示例:
+  bash update.sh                    # 更新到最新 release
+  bash update.sh b3631              # 更新到指定 commit
+  bash update.sh v0.0.1             # 更新到指定标签
+  bash update.sh --help             # 显示帮助
+EOF
+}
+# --- 工具函数 ------------------------------------------------
+is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
+
+# 保存当前状态以便回滚
+save_state() {
+    CURRENT_COMMIT=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    CURRENT_SHORT=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD)
+    CURRENT_TAG=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
+}
+
+# 回滚到之前的状态
+rollback() {
+    llama_warn "构建失败，正在回滚到之前的版本..."
+    git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || true
+    # 恢复子模块到与主仓库一致的状态
+    git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
+    llama_info "已回滚到 ${CURRENT_SHORT}"
+}
+
+# --- GitHub API 查询 -----------------------------------------
 fetch_latest_release_gh() {
     local json
-    json=$(gh release view --repo "${REPO}" --json tagName,targetCommitish,publishedAt,url) || return 1
-    RELEASE_TAG=$(echo "${json}" | python3 -c "import json,sys; print(json.load(sys.stdin)['tagName'])") || return 1
-    RELEASE_COMMIT=$(echo "${json}" | python3 -c "import json,sys; print(json.load(sys.stdin)['targetCommitish'])") || return 1
-    RELEASE_DATE=$(echo "${json}" | python3 -c "import json,sys; print(json.load(sys.stdin)['publishedAt'])") || return 1
-    RELEASE_URL=$(echo "${json}" | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])") || return 1
+    if ! json=$(gh release view --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
+        return 1
+    fi
+    RELEASE_TAG=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['tagName'])") || return 1
+    RELEASE_COMMIT=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['targetCommitish'])") || return 1
+    RELEASE_DATE=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['publishedAt'])") || return 1
+    RELEASE_URL=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])") || return 1
 }
 
 fetch_latest_release_curl() {
     if ! command -v curl &>/dev/null; then
-        err "需要 curl 命令，请先安装"
+        llama_err "需要 curl 命令，请先安装"
         return 1
     fi
+
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local tmp
     tmp=$(mktemp /tmp/llama_release.XXXXXX.json)
-    trap 'rm -f "${tmp}"' RETURN
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmp'" RETURN
+
     local http_code
     http_code=$(curl -sL --connect-timeout 10 --max-time 30 \
-        -o "${tmp}" -w "%{http_code}" \
-        -H "Accept: application/vnd.github+json" "${api_url}") || return 1
-    if [ "${http_code}" != "200" ]; then
-        err "GitHub API 请求失败 (HTTP ${http_code})"
-        cat "${tmp}" 2>/dev/null >&2
+        -o "$tmp" -w "%{http_code}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "$api_url") || return 1
+
+    if [[ "$http_code" != "200" ]]; then
+        llama_err "GitHub API 请求失败 (HTTP ${http_code})"
+        if [[ -s "$tmp" ]]; then
+            cat "$tmp" >&2 || true
+        fi
         return 1
     fi
-    RELEASE_TAG=$(python3 -c "import json; r=json.load(open('${tmp}')); print(r['tag_name'])") || return 1
-    RELEASE_COMMIT=$(python3 -c "import json; r=json.load(open('${tmp}')); print(r['target_commitish'])") || return 1
-    RELEASE_DATE=$(python3 -c "import json; r=json.load(open('${tmp}')); print(r['published_at'])") || return 1
-    RELEASE_URL=$(python3 -c "import json; r=json.load(open('${tmp}')); print(r['html_url'])") || return 1
+
+    RELEASE_TAG=$(python3 -c "import json; r=json.load(open('$tmp')); print(r['tag_name'])") || return 1
+    RELEASE_COMMIT=$(python3 -c "import json; r=json.load(open('$tmp')); print(r['target_commitish'])") || return 1
+    RELEASE_DATE=$(python3 -c "import json; r=json.load(open('$tmp')); print(r['published_at'])") || return 1
+    RELEASE_URL=$(python3 -c "import json; r=json.load(open('$tmp')); print(r['html_url'])") || return 1
 }
 
+# --- 主逻辑 --------------------------------------------------
 echo ""
 echo "=========================================="
 echo "  llama.cpp 一键更新脚本"
 echo "=========================================="
 echo ""
 
-info "检查前置条件..."
-
-if [ ! -d "${LLAMA_CPP_SRC}/.git" ]; then
-    err "未找到 llama.cpp 仓库: ${LLAMA_CPP_SRC}"
-    err "请先克隆仓库: git clone ${REPO_URL} ${LLAMA_CPP_SRC}"
-    exit 1
+# 参数解析
+TARGET_VERSION=""
+if (($# > 0)); then
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            TARGET_VERSION="$1"
+            ;;
+    esac
+    shift
+    if (($# > 0)); then
+        llama_warn "忽略额外参数: $*"
+    fi
 fi
 
-if [ ! -f "${BUILD_SCRIPT}" ]; then
-    err "未找到构建脚本: ${BUILD_SCRIPT}"
-    exit 1
-fi
+# 前置检查
+llama_info "检查前置条件..."
 
-if ! command -v python3 &>/dev/null; then
-    err "需要 python3 命令，请先安装"
-    exit 1
-fi
+llama_check_commands \
+    git "git" \
+    python3 "python3" \
+    && llama_ok "基础工具检查通过" || exit 1
 
-ok "前置条件检查通过"
+llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 仓库" || exit 1
+llama_check_file "${LLAMA_CPP_SRC}/.git/config" "Git 仓库配置" || exit 1
+llama_check_file "$BUILD_SCRIPT" "构建脚本" || exit 1
 
-echo ""
-info "检查本地仓库状态..."
+# 检查本地仓库状态
+llama_info "检查本地仓库状态..."
 
-cd "${LLAMA_CPP_SRC}"
+cd "$LLAMA_CPP_SRC" >/dev/null
 
-if [ -n "$(git status --porcelain)" ]; then
-    err "检测到未提交的更改，请先处理（stash 或 commit）后再更新："
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    llama_err "检测到未提交的更改，请先处理后再更新:"
     git status --short
     exit 1
 fi
 
+save_state
+
 ACTUAL_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
-if [ "${ACTUAL_REMOTE}" != "${REPO_URL}" ]; then
-    warn "远程 origin (${ACTUAL_REMOTE}) 与预期 (${REPO_URL}) 不一致"
-    warn "如果 origin 是 fork，可能无法获取上游最新 release 标签"
+if [[ "$ACTUAL_REMOTE" != "$REPO_URL" && "$ACTUAL_REMOTE" != "${REPO_URL}.git" ]]; then
+    llama_warn "远程 origin 与预期不一致"
+    llama_detail "当前: ${ACTUAL_REMOTE}"
+    llama_detail "预期: ${REPO_URL}"
+    llama_warn "如果 origin 是 fork，可能无法获取上游最新 release"
 fi
 
-CURRENT_COMMIT=$(git rev-parse HEAD)
-CURRENT_SHORT=$(git rev-parse --short HEAD)
-CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "(不在发布标签上)")
+llama_ok "本地仓库状态正常"
+llama_detail "当前 Commit: ${CURRENT_SHORT}"
+llama_detail "当前标签:    ${CURRENT_TAG}"
 
-ok "本地仓库状态正常"
-echo "  当前 Commit: ${CURRENT_SHORT}"
-echo "  当前标签:    ${CURRENT_TAG}"
+# 确定目标版本
+if [[ -n "$TARGET_VERSION" ]]; then
+    # 用户指定了版本
+    RELEASE_TAG="$TARGET_VERSION"
+    if is_full_commit_sha "$TARGET_VERSION"; then
+        RELEASE_COMMIT="$TARGET_VERSION"
+    fi
+    llama_info "使用用户指定的版本: ${RELEASE_TAG}"
+else
+    # 查询 GitHub 最新 release
+    llama_info "正在查询 GitHub 最新发布版本..."
 
-echo ""
-info "正在查询 GitHub 最新发布版本..."
-
-if command -v gh &>/dev/null && gh auth status &>/dev/null; then
-    info "使用 gh CLI 查询（已认证，无限流顾虑）"
-    if ! fetch_latest_release_gh; then
-        warn "gh 查询失败，回退到 curl"
+    if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+        llama_info "使用 gh CLI 查询（已认证）"
+        if ! fetch_latest_release_gh; then
+            llama_warn "gh 查询失败，回退到 curl"
+            if ! fetch_latest_release_curl; then
+                exit 1
+            fi
+        fi
+    else
+        llama_warn "gh 未安装或未登录，使用 curl 直接访问 API"
         if ! fetch_latest_release_curl; then
             exit 1
         fi
     fi
-else
-    warn "gh 未安装或未登录，使用 curl 直接访问 API"
-    if ! fetch_latest_release_curl; then
-        exit 1
-    fi
+
+    llama_ok "查询成功"
 fi
 
+# 显示版本信息
 RELEASE_SHORT="${RELEASE_COMMIT:0:7}"
-
-ok "查询成功"
-echo "  最新版本:    ${RELEASE_TAG}"
-if is_commit_sha "${RELEASE_COMMIT}"; then
-    echo "  对应 Commit: ${RELEASE_SHORT} (${RELEASE_COMMIT})"
-else
-    echo "  目标分支:    ${RELEASE_COMMIT}"
+llama_detail "目标版本:    ${RELEASE_TAG}"
+if [[ -n "$RELEASE_COMMIT" ]] && is_full_commit_sha "$RELEASE_COMMIT"; then
+    llama_detail "对应 Commit: ${RELEASE_SHORT} (${RELEASE_COMMIT})"
 fi
-echo "  发布时间:    ${RELEASE_DATE}"
-echo "  发布页面:    ${RELEASE_URL}"
+if [[ -n "$RELEASE_DATE" ]]; then
+    llama_detail "发布时间:    ${RELEASE_DATE}"
+fi
+if [[ -n "$RELEASE_URL" ]]; then
+    llama_detail "发布页面:    ${RELEASE_URL}"
+fi
 
-echo ""
-info "对比版本..."
+# 版本对比
+llama_info "对比版本..."
 
-if [ "${CURRENT_TAG}" = "${RELEASE_TAG}" ]; then
-    ok "本地已在该发布标签上 (${RELEASE_TAG})，无需更新！"
+if [[ "${CURRENT_TAG}" = "${RELEASE_TAG}" ]]; then
+    llama_ok "本地已在该版本 (${RELEASE_TAG})，无需更新！"
     exit 0
 fi
 
-if is_commit_sha "${RELEASE_COMMIT}" && [ "${CURRENT_COMMIT}" = "${RELEASE_COMMIT}" ]; then
-    ok "本地已是最新发布版本的 commit (${RELEASE_SHORT})，无需更新！"
+if is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$CURRENT_COMMIT" = "$RELEASE_COMMIT" ]]; then
+    llama_ok "本地已是最新 commit (${RELEASE_SHORT})，无需更新！"
     exit 0
 fi
 
-if is_commit_sha "${RELEASE_COMMIT}"; then
-    warn "需要更新: ${CURRENT_SHORT} (${CURRENT_TAG}) → ${RELEASE_SHORT} (${RELEASE_TAG})"
-else
-    warn "需要更新: ${CURRENT_SHORT} (${CURRENT_TAG}) → ${RELEASE_TAG}"
+llama_warn "需要更新: ${CURRENT_SHORT} (${CURRENT_TAG}) → ${RELEASE_TAG}"
+
+# 拉取并切换
+llama_info "正在从远程仓库拉取最新引用..."
+
+git fetch origin --quiet --tags
+
+# 尝试 fetch 特定标签（如果是标签的话）
+if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "."; then
+    git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
 fi
 
-echo ""
-info "正在从远程仓库拉取最新引用和标签..."
-
-git fetch origin --quiet --force "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-
-if ! git rev-parse "${RELEASE_TAG}" &>/dev/null; then
-    err "本地找不到标签 ${RELEASE_TAG}，fetch 可能失败"
+if ! git rev-parse --verify "${RELEASE_TAG}^{commit}" &>/dev/null; then
+    llama_err "本地找不到目标版本: ${RELEASE_TAG}"
+    llama_detail "请确认版本号正确，或检查网络连接"
     exit 1
 fi
 
-info "切换到发布版本 ${RELEASE_TAG}..."
+llama_info "切换到版本 ${RELEASE_TAG}..."
 
 git checkout "${RELEASE_TAG}" --quiet
 
 ACTUAL_COMMIT=$(git rev-parse HEAD)
 ACTUAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
 
-if [ "${ACTUAL_TAG}" != "${RELEASE_TAG}" ]; then
-    err "checkout 后不在预期标签上 (期望: ${RELEASE_TAG}, 实际: ${ACTUAL_TAG})"
-    exit 1
+if [[ -n "$ACTUAL_TAG" && "$ACTUAL_TAG" != "$RELEASE_TAG" ]]; then
+    llama_warn "checkout 后标签不一致 (期望: ${RELEASE_TAG}, 实际: ${ACTUAL_TAG})"
 fi
 
-if is_commit_sha "${RELEASE_COMMIT}" && [ "${ACTUAL_COMMIT}" != "${RELEASE_COMMIT}" ]; then
-    warn "checkout commit (${ACTUAL_COMMIT:0:7}) 与 API 返回的 commitish (${RELEASE_SHORT}) 不一致"
-    warn "但标签 ${RELEASE_TAG} 已确认 checkout 成功，继续构建..."
+if is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$ACTUAL_COMMIT" != "$RELEASE_COMMIT" ]]; then
+    llama_warn "checkout commit (${ACTUAL_COMMIT:0:7}) 与 API 返回的 commitish (${RELEASE_SHORT}) 不一致"
+    llama_warn "但标签 ${RELEASE_TAG} 已确认 checkout 成功，继续构建..."
 fi
 
-ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
+llama_ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
 
-echo ""
-info "同步子模块..."
-if [ -f "${LLAMA_CPP_SRC}/.gitmodules" ]; then
-    git submodule update --init --recursive --quiet
-    ok "子模块已同步"
+# 同步子模块
+llama_info "同步子模块..."
+if [[ -f ".gitmodules" ]]; then
+    if ! git submodule update --init --recursive --quiet; then
+        llama_err "子模块同步失败"
+        rollback
+        exit 1
+    fi
+    llama_ok "子模块已同步"
 else
-    info "当前版本无子模块，跳过"
+    llama_info "当前版本无子模块，跳过"
 fi
 
+# 构建（带失败回滚）
 echo ""
 echo "=========================================="
 echo "  源码更新完成，开始构建..."
 echo "=========================================="
 echo ""
 
-bash "${BUILD_SCRIPT}"
+set +e
+bash "$BUILD_SCRIPT"
+BUILD_STATUS=$?
+set -e
+
+if [[ "$BUILD_STATUS" -ne 0 ]]; then
+    rollback
+    llama_err "构建失败，已回滚到 ${CURRENT_SHORT}"
+    exit 1
+fi
 
 echo ""
 echo "=========================================="
@@ -211,9 +303,11 @@ echo "=========================================="
 echo ""
 echo "  更新: ${CURRENT_SHORT} → ${ACTUAL_COMMIT:0:7}"
 echo "  版本: ${RELEASE_TAG}"
-echo "  发布: ${RELEASE_DATE}"
+if [[ -n "$RELEASE_DATE" ]]; then
+    echo "  发布: ${RELEASE_DATE}"
+fi
 echo ""
 echo "运行示例:"
-echo "  source /mnt/hdd/projects/llama.cpp_helper/run_env.sh"
+echo "  source ${SCRIPT_DIR}/run_env.sh"
 echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
 echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
