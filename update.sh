@@ -305,10 +305,10 @@ if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
     fi
 
     llama_ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
-
-    # 清理旧版本残留的子模块目录
-    # git checkout 不会自动删除旧版本中已 init 但新版本不再追踪的子模块工作目录
-    # 扫描工作目录中的 .git gitlink 文件，对比当前索引中的 submodule 路径，找出残留
+# 清理旧版本残留的子模块目录
+# git checkout 不会自动删除旧版本中已 init 但新版本不再追踪的子模块工作目录
+# 扫描工作目录中的 .git gitlink 文件，对比当前索引中的 submodule 路径，找出残留
+cleanup_stale_submodules() {
     local -A expected_paths
     while IFS= read -r path; do
         expected_paths["$path"]=1
@@ -332,6 +332,11 @@ if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
     if [[ "$stale_count" -gt 0 ]]; then
         llama_ok "旧子模块清理完成 (${stale_count} 个)"
     fi
+}
+
+# 在需要的地方调用函数
+cleanup_stale_submodules
+
 
     # 同步当前版本的子模块
     llama_info "同步子模块..."
