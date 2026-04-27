@@ -23,13 +23,14 @@
 - Python 3
 - Git
 
+> **磁盘空间要求**：构建需要至少 10GB 可用空间（脚本会自动检查）。
 
 ## 脚本说明
 
 ### 配置文件
 
 #### `config.sh`
-集中定义共享路径，build.sh 和 update.sh 会 source 此文件。
+集中定义共享路径和常量，build.sh 和 update.sh 会 source 此文件。
 
 ```bash
 # 默认路径（可通过环境变量覆盖）
@@ -56,6 +57,12 @@ bash build.sh -i
 # 显示帮助
 bash build.sh --help
 ```
+
+**安全特性：**
+- 文件锁防止并发构建冲突
+- 磁盘空间预检查（需 ≥10GB）
+- SIGINT/SIGTERM 信号处理（自动清理未完成构建）
+- 跨平台 `stat` 支持（Linux/BSD/macOS）
 
 **构建选项：**
 - OpenBLAS (CPU 加速)
@@ -86,10 +93,17 @@ bash update.sh b8941
 bash update.sh --help
 ```
 
+**安全特性：**
+- 文件锁防止并发更新冲突
+- 检查未提交的更改（主仓库 + 子模块）
+- 构建失败自动回滚到之前的版本
+- 回滚失败时提供详细的恢复指导
+- SIGINT/SIGTERM 信号处理（自动恢复到更新前状态）
+- 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目
+
 **特性：**
 - 优先使用 `gh` CLI（已认证时无 API 限流），回退到 `curl`
-- 检查未提交的更改（防止覆盖本地修改）
-- 构建失败自动回滚到之前的版本
+- 构建失败自动回滚到之前的版本并重新构建
 - 自动同步 Git 子模块
 
 #### `run_env.sh` - 运行时环境变量
@@ -106,6 +120,8 @@ source run_env.sh --status
 # 显示帮助
 source run_env.sh --help
 ```
+
+> **注意：** 本脚本必须使用 `source` 执行。直接运行 `bash run_env.sh` 会提示警告并退出。
 
 **设置的环境变量：**
 
@@ -124,6 +140,11 @@ source run_env.sh --help
 - 依赖检查 (`llama_check_commands`)
 - 路径验证 (`llama_check_dir`, `llama_check_file`)
 - CPU/GPU 检测 (`llama_get_cpu_count`, `llama_check_gpu`)
+- 文件锁 (`llama_acquire_lock`, `llama_release_lock`)
+- 磁盘空间检查 (`llama_check_disk_space`)
+- 信号陷阱管理 (`llama_setup_trap`, `llama_cleanup_trap`)
+- 网络错误上下文 (`llama_with_network_context`)
+- 跨平台文件大小检测 (`llama_file_size`)
 
 ## 典型工作流
 
@@ -195,12 +216,23 @@ bash build.sh -i
 
 **症状：** `update.sh` 执行后构建失败
 
-**处理：** 脚本会自动回滚到之前的版本。如需手动回滚：
+**处理：** 脚本会自动回滚到之前的版本。如果回滚后构建也失败，脚本会输出详细的恢复步骤指导。
+
+如需手动回滚：
 ```bash
 cd /mnt/hdd/projects/llama.cpp
 git log --oneline -5          # 查看历史
 git checkout <之前的commit>  # 回滚
+git submodule update --recursive
 ```
+
+### 并发执行冲突
+
+**症状：** `另一个进程正在运行，请等待其完成`
+
+**原因：** build.sh 和 update.sh 使用文件锁防止并发执行冲突。
+
+**处理：** 等待其他构建/更新进程完成后再重试。
 
 ## 可选环境变量
 

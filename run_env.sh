@@ -5,6 +5,15 @@
 # 使用：source /mnt/hdd/projects/llama.cpp_helper/run_env.sh
 # ============================================================
 
+# 防止直接执行
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "[WARN] 本脚本应当使用 source 执行，而非直接运行" >&2
+    echo "用法: source ${BASH_SOURCE[0]} [选项]" >&2
+    echo "" >&2
+    echo "直接执行不会在当前 shell 中设置环境变量。" >&2
+    exit 1
+fi
+
 # 本脚本设计为被 source 执行，不启用 set -euo pipefail
 # 因为 source 时退出会影响当前 shell
 
@@ -55,7 +64,8 @@ EOF
 
 show_env_vars() {
     local var
-    for var in "${!LLAMA_ENV_VARS[@]}"; do
+    # 使用排序确保输出顺序确定性
+    for var in $(echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort); do
         local info="${LLAMA_ENV_VARS[$var]}"
         local desc="${info#*|}"
         echo "  ${var}"
@@ -123,7 +133,7 @@ main() {
 
     # 设置每个环境变量
     local var info value desc
-    for var in "${!LLAMA_ENV_VARS[@]}"; do
+    for var in $(echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort); do
         info="${LLAMA_ENV_VARS[$var]}"
         value="${info%|*}"
         desc="${info#*|}"

@@ -17,6 +17,23 @@ source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
 
+# --- 文件锁定 ------------------------------------------------
+llama_acquire_lock || exit 1
+
+# --- 退出清理 ------------------------------------------------
+cleanup_on_exit() {
+    local exit_code=$?
+    llama_cleanup_trap
+    llama_release_lock
+    # 非增量构建时，若构建失败则清理未完成的构建目录
+    if [[ "$INCREMENTAL" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
+        llama_warn "清理未完成的构建目录..."
+        rm -rf "$BUILD_DIR"
+    fi
+    exit "$exit_code"
+}
+llama_setup_trap cleanup_on_exit
+
 # --- 帮助信息 ------------------------------------------------
 show_help() {
     cat <<EOF
@@ -46,11 +63,15 @@ while (($# > 0)); do
             ;;
         -h|--help)
             show_help
+            llama_cleanup_trap
+            llama_release_lock
             exit 0
             ;;
         *)
             llama_err "未知选项: $1"
             show_help
+            llama_cleanup_trap
+            llama_release_lock
             exit 1
             ;;
     esac
@@ -82,6 +103,9 @@ llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || exit 1
 llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || exit 1
 
 llama_check_gpu || true
+
+# --- 磁盘空间检查 --------------------------------------------
+llama_check_disk_space "$LLAMA_CPP_SRC" || exit 1
 
 # --- 动态检测 ------------------------------------------------
 BUILD_DIR="${LLAMA_CPP_SRC}/build"
@@ -208,7 +232,13 @@ BIN_DIR="${BUILD_DIR}/bin"
 for binary in llama-cli llama-server; do
     bin_path="${BIN_DIR}/${binary}"
     if [[ -x "$bin_path" ]]; then
-        bin_size=$(stat -c %s "$bin_path" 2>/dev/null | numfmt --to=iec-i 2>/dev/null) || bin_size="unknown"
+        size_bytes=
+        size_bytes=$(llama_file_size "$bin_path")
+        if [[ -n "$size_bytes" ]]; then
+            bin_size=$(echo "$size_bytes" | numfmt --to=iec-i 2>/dev/null) || bin_size="${size_bytes}B"
+        else
+            bin_size="unknown"
+        fi
         llama_ok "二进制文件: ${binary} (${bin_size})"
     else
         llama_err "二进制文件未生成: ${binary}"
@@ -218,24 +248,32 @@ done
 
 # 检查 CUDA 链接
 llama_info "CUDA 链接检查:"
-if ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -qE "libcudart|libcublas|libcuda"; then
-    ldd "${BIN_DIR}/llama-cli" | grep -E "libcudart|libcublas|libcuda" | while IFS= read -r line; do
-        llama_detail "$line"
-    done
-    llama_ok "CUDA 链接正常"
+if [[ -x "${BIN_DIR}/llama-cli" ]]; then
+    if ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -qE "libcudart|libcublas|libcuda"; then
+        ldd "${BIN_DIR}/llama-cli" | grep -E "libcudart|libcublas|libcuda" | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        llama_ok "CUDA 链接正常"
+    else
+        llama_warn "未找到 CUDA 动态库链接（可能是静态链接）"
+    fi
 else
-    llama_warn "未找到 CUDA 动态库链接（可能是静态链接）"
+    llama_warn "llama-cli 不存在，跳过 CUDA 链接检查"
 fi
 
 # 检查 OpenBLAS 链接
 llama_info "OpenBLAS 链接检查:"
-if ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -qiE "openblas|blas"; then
-    ldd "${BIN_DIR}/llama-cli" | grep -iE "openblas|blas" | while IFS= read -r line; do
-        llama_detail "$line"
-    done
-    llama_ok "OpenBLAS 链接正常"
+if [[ -x "${BIN_DIR}/llama-cli" ]]; then
+    if ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -qiE "openblas|blas"; then
+        ldd "${BIN_DIR}/llama-cli" | grep -iE "openblas|blas" | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        llama_ok "OpenBLAS 链接正常"
+    else
+        llama_warn "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
+    fi
 else
-    llama_warn "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
+    llama_warn "llama-cli 不存在，跳过 OpenBLAS 链接检查"
 fi
 
 # 验证二进制文件可执行性
@@ -284,5 +322,7 @@ fi
 # 写入构建标记（用于 update.sh 验证构建是否与源码匹配）
 git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || true
 
-echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BIN_DIR}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BIN_DIR}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
+llama_cleanup_trap
+llama_release_lock
 
+echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BIN_DIR}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BIN_DIR}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"

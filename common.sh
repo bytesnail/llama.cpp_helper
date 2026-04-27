@@ -112,3 +112,109 @@ llama_check_gpu() {
     llama_warn "未检测到 NVIDIA GPU"
     return 1
 }
+
+# --- File Locking --------------------------------------------
+# Usage: llama_acquire_lock [lock_file]
+# Returns 0 on success, 1 if lock is held by another process
+llama_acquire_lock() {
+    local lock_file="${1:-$LOCK_FILE}"
+    if [[ -z "$lock_file" ]]; then
+        llama_err "未指定锁文件路径"
+        return 1
+    fi
+    # Open file descriptor for lock
+    exec 200>"$lock_file"
+    if ! flock -n 200; then
+        llama_err "另一个进程正在运行，请等待其完成"
+        return 1
+    fi
+    # Write PID for diagnostics
+    echo $$ >&200
+    return 0
+}
+
+# Usage: llama_release_lock
+# Closes the lock file descriptor
+llama_release_lock() {
+    exec 200>&- 2>/dev/null || true
+}
+
+# --- Disk Space Check ----------------------------------------
+# Usage: llama_check_disk_space <path> [min_gb]
+# Returns 0 if sufficient space, 1 otherwise
+llama_check_disk_space() {
+    local path="$1"
+    local min_gb="${2:-${MIN_FREE_DISK_GB:-10}}"
+    
+    if [[ ! -d "$path" ]]; then
+        llama_warn "无法检查磁盘空间：路径不存在 $path"
+        return 0  # 不阻塞，仅警告
+    fi
+    
+    local available_kb
+    available_kb=$(df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}')
+    if [[ -z "$available_kb" ]]; then
+        llama_warn "无法获取磁盘空间信息"
+        return 0
+    fi
+    
+    local available_gb=$((available_kb / 1024 / 1024))
+    llama_detail "磁盘可用空间: ${available_gb}GB (要求: ${min_gb}GB)"
+    
+    if ((available_gb < min_gb)); then
+        llama_err "磁盘空间不足: 可用 ${available_gb}GB, 需要至少 ${min_gb}GB"
+        return 1
+    fi
+    
+    llama_ok "磁盘空间检查通过"
+    return 0
+}
+
+# --- Signal Trap Management ----------------------------------
+# Usage: llama_setup_trap <cleanup_command>
+# Sets up SIGINT and SIGTERM handlers
+llama_setup_trap() {
+    local cleanup_cmd="$1"
+    if [[ -z "$cleanup_cmd" ]]; then
+        return 1
+    fi
+    trap "$cleanup_cmd" SIGINT SIGTERM
+}
+
+# Usage: llama_cleanup_trap
+# Resets signal handlers to default
+llama_cleanup_trap() {
+    trap - SIGINT SIGTERM
+}
+
+# --- Network Context Wrapping --------------------------------
+# Usage: llama_with_network_context <description> <command> [args...]
+# Runs a command with network error context
+llama_with_network_context() {
+    local desc="$1"
+    shift
+    if "$@"; then
+        return 0
+    else
+        local exit_code=$?
+        llama_err "${desc} 失败 (退出码: ${exit_code})"
+        llama_detail "请检查网络连接和远程仓库状态"
+        return "$exit_code"
+    fi
+}
+
+# --- Portable stat -------------------------------------------
+# Usage: llama_file_size <path>
+# Returns file size in bytes, or empty string on error
+llama_file_size() {
+    local path="$1"
+    if [[ ! -f "$path" ]]; then
+        return 1
+    fi
+    # Try GNU stat first, then BSD stat
+    local size
+    size=$(stat -c %s "$path" 2>/dev/null) || \
+    size=$(stat -f%z "$path" 2>/dev/null) || \
+    size=""
+    echo "$size"
+}
