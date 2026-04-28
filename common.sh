@@ -114,6 +114,7 @@ llama_check_gpu() {
 }
 
 # --- File Locking --------------------------------------------
+# 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
 # Usage: llama_acquire_lock [lock_file]
 # Returns 0 on success, 1 if lock is held by another process
 llama_acquire_lock() {
@@ -122,21 +123,38 @@ llama_acquire_lock() {
         llama_err "未指定锁文件路径"
         return 1
     fi
-    # Open file descriptor for lock
-    exec 200>"$lock_file"
-    if ! flock -n 200; then
-        llama_err "另一个进程正在运行，请等待其完成"
+    # 使用动态 fd，bash 自动设置 close-on-exec，防止子进程继承
+    local fd
+    exec {fd}>"$lock_file"
+    if ! flock -n "$fd"; then
+        # 锁被占用，尝试读取持有者 PID 用于诊断
+        local holder_pid holder_cmd
+        holder_pid=$(cat "$lock_file" 2>/dev/null || true)
+        if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
+            holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
+            llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
+        else
+            # 锁文件中的 PID 已不存在，但 flock 仍被持有，说明是其他进程继承了 fd
+            llama_err "另一个进程正在运行，请等待其完成"
+            llama_detail "提示: 如果确认无其他更新/构建进程在运行，可手动删除锁文件: rm -f ${lock_file}"
+        fi
+        exec {fd}>&- 2>/dev/null || true
         return 1
     fi
-    # Write PID for diagnostics
-    echo $$ >&200
+    # 获取锁成功，写入 PID 用于诊断
+    echo $$ >&"$fd"
+    # 保存 fd 到全局变量，供 llama_release_lock 使用
+    LOCK_FD=$fd
     return 0
 }
 
 # Usage: llama_release_lock
 # Closes the lock file descriptor
 llama_release_lock() {
-    exec 200>&- 2>/dev/null || true
+    if [[ -n "${LOCK_FD:-}" ]]; then
+        exec {LOCK_FD}>&- 2>/dev/null || true
+        unset LOCK_FD
+    fi
 }
 
 # --- Disk Space Check ----------------------------------------
