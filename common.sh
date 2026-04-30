@@ -2,6 +2,7 @@
 # ============================================================
 # llama.cpp helper - Common Library
 # Shared utilities for all helper scripts
+# Requires: Bash >= 4.2 (declare -A associative arrays, [[ -v ]] variable test)
 # ============================================================
 
 # --- Safety --------------------------------------------------
@@ -123,45 +124,50 @@ llama_acquire_lock() {
         llama_err "未指定锁文件路径"
         return 1
     fi
-    # 在打开文件之前读取现有 PID（exec {fd}> 会清空文件内容）
-    local holder_pid
-    holder_pid=$(cat "$lock_file" 2>/dev/null || true)
-    
-    # 使用动态 fd，bash 自动设置 close-on-exec，防止子进程继承
+
+    # Ensure lock file directory exists
+    local lock_dir
+    lock_dir=$(dirname "$lock_file")
+    if [[ ! -d "$lock_dir" ]]; then
+        mkdir -p "$lock_dir" 2>/dev/null || :
+    fi
+
     local fd
-    exec {fd}>"$lock_file"
+    exec {fd}>>"$lock_file"
+
     if ! flock -n "$fd"; then
-        # 锁被占用，使用预先读取的 PID 进行诊断
+        # Lock held — read PID from file for diagnostics ONLY after flock fails
+        local holder_pid
+        holder_pid=$(cat "$lock_file" 2>/dev/null || :)
         local holder_cmd
         if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
             holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
             llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
         else
-            # 锁文件中的 PID 已不存在（或无法读取），但 flock 仍被持有
-            # 尝试强制清理：删除锁文件并重建，绕过旧 inode 上的 flock
+            # Stale lock holder — attempt recovery
             llama_warn "检测到残留锁（原持有者 PID ${holder_pid:-未知} 已不存在）"
             llama_detail "尝试自动清理残留锁..."
-            exec {fd}>&- 2>/dev/null || true
+            exec {fd}>&- 2>/dev/null || :
             rm -f "$lock_file"
-            exec {fd}>"$lock_file"
+            exec {fd}>>"$lock_file"
             if ! flock -n "$fd"; then
                 llama_err "自动清理失败，锁仍然被占用"
                 llama_detail "请手动检查是否有其他进程在使用该锁文件"
                 llama_detail "可尝试: rm -f ${lock_file}"
-                exec {fd}>&- 2>/dev/null || true
+                exec {fd}>&- 2>/dev/null || :
                 return 1
             fi
             llama_ok "残留锁已自动清理，继续执行"
+            : > "$lock_file"
             echo $$ >&"$fd"
             LOCK_FD=$fd
             return 0
         fi
-        exec {fd}>&- 2>/dev/null || true
+        exec {fd}>&- 2>/dev/null || :
         return 1
     fi
-    # 获取锁成功，写入 PID 用于诊断
+    : > "$lock_file"
     echo $$ >&"$fd"
-    # 保存 fd 到全局变量，供 llama_release_lock 使用
     LOCK_FD=$fd
     return 0
 }
@@ -170,13 +176,11 @@ llama_acquire_lock() {
 # Closes the lock file descriptor
 llama_release_lock() {
     if [[ -n "${LOCK_FD:-}" ]]; then
-        exec {LOCK_FD}>&- 2>/dev/null || true
+        exec {LOCK_FD}>&- 2>/dev/null || :
         unset LOCK_FD
     fi
-    # 清理锁文件，防止残留
-    if [[ -n "${LOCK_FILE:-}" ]]; then
-        rm -f "$LOCK_FILE"
-    fi
+    # Lock file is NOT deleted — flock works on inodes, not filenames.
+    # Deleting while another process waits causes the waiter to lock a deleted inode.
 }
 
 # --- Disk Space Check ----------------------------------------
@@ -218,6 +222,7 @@ llama_setup_trap() {
     if [[ -z "$cleanup_cmd" ]]; then
         return 1
     fi
+    # shellcheck disable=SC2064
     trap "$cleanup_cmd" SIGINT SIGTERM
 }
 
@@ -257,4 +262,81 @@ llama_file_size() {
     size=$(stat -f%z "$path" 2>/dev/null) || \
     size=""
     echo "$size"
+}
+
+# --- Exit Helpers ---------------------------------------------
+llama_die() {
+    local msg="${1:-}"
+    local code="${2:-1}"
+    if [[ -n "$msg" ]]; then
+        llama_err "$msg"
+    fi
+    llama_cleanup_trap
+    llama_release_lock
+    exit "$code"
+}
+
+llama_safe_exit() {
+    local code="${1:-0}"
+    llama_cleanup_trap
+    llama_release_lock
+    exit "$code"
+}
+
+llama_return_or_exit() {
+    local code="$1"
+    # shellcheck disable=SC2317
+    return "$code" 2>/dev/null || exit "$code"
+}
+
+# --- Init/Source/Help Helpers --------------------------------
+llama_init_script_dir() {
+    local caller="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+    SCRIPT_DIR="$(cd "$(dirname "$caller")" >/dev/null && pwd)"
+    export SCRIPT_DIR
+}
+
+llama_source_deps() {
+    if [[ -z "${SCRIPT_DIR:-}" ]]; then
+        echo "[ERROR] SCRIPT_DIR not set. Call llama_init_script_dir first." >&2
+        return 1
+    fi
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/common.sh"
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/config.sh"
+}
+
+llama_show_help() {
+    local script_name="$1"
+    local description="$2"
+    local options="${3:-}"
+    local examples="${4:-}"
+    cat <<EOF
+用法: ${script_name} [选项]
+
+描述:
+  ${description}
+EOF
+    if [[ -n "$options" ]]; then
+        echo ""
+        echo "选项:"
+        echo "$options"
+    fi
+    if [[ -n "$examples" ]]; then
+        echo ""
+        echo "示例:"
+        echo "$examples"
+    fi
+}
+
+llama_show_version() {
+    echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
+}
+
+llama_run_silent() {
+    set +e
+    "$@"
+    local ret=$?
+    return "$ret"
 }
