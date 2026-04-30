@@ -9,16 +9,13 @@
 # ============================================================
 
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/common.sh"
-# shellcheck source=/dev/null
-source "${SCRIPT_DIR}/config.sh"
+llama_source_deps
 
 # --- 文件锁定 ------------------------------------------------
-llama_acquire_lock || exit 1
+llama_acquire_lock || llama_die "无法获取文件锁"
 
 # 确保所有退出路径都释放文件锁（包括正常退出和 set -e 触发的异常退出）
 trap 'llama_release_lock' EXIT
@@ -26,34 +23,25 @@ trap 'llama_release_lock' EXIT
 # --- 退出清理 ------------------------------------------------
 cleanup_on_exit() {
     local exit_code=$?
-    llama_cleanup_trap
-    llama_release_lock
-    # 非增量构建时，若构建失败则清理未完成的构建目录
-    if [[ "$INCREMENTAL" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
+    if [[ "${INCREMENTAL:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
         llama_warn "清理未完成的构建目录..."
         rm -rf "$BUILD_DIR"
     fi
-    exit "$exit_code"
+    llama_safe_exit "$exit_code"
 }
 llama_setup_trap cleanup_on_exit
 
 # --- 帮助信息 ------------------------------------------------
 show_help() {
-    cat <<EOF
-用法: $(basename "$0") [选项]
-
-描述:
-  使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS 和 CUDA 支持。
-
-选项:
-  -i, --incremental    增量构建（不清理旧 build 目录）
+    llama_show_help \
+        "$(basename "$0")" \
+        "使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS 和 CUDA 支持。" \
+        "  -i, --incremental    增量构建（不清理旧 build 目录）
   -h, --help           显示此帮助信息
-
-示例:
-  bash build.sh              # 完整重新构建
+      --version        显示版本信息" \
+        "  bash build.sh              # 完整重新构建
   bash build.sh -i           # 增量构建
-  bash build.sh --help       # 显示帮助
-EOF
+  bash build.sh --help       # 显示帮助"
 }
 
 # --- 参数解析 ------------------------------------------------
@@ -66,16 +54,16 @@ while (($# > 0)); do
             ;;
         -h|--help)
             show_help
-            llama_cleanup_trap
+            llama_release_lock
+            exit 0
+            ;;
+        --version)
+            llama_show_version
             llama_release_lock
             exit 0
             ;;
         *)
-            llama_err "未知选项: $1"
-            show_help
-            llama_cleanup_trap
-            llama_release_lock
-            exit 1
+            llama_die "未知选项: $1"
             ;;
     esac
 done
@@ -83,17 +71,17 @@ done
 # --- 前置检查 ------------------------------------------------
 llama_step "前置检查"
 
-llama_check_commands \
+# shellcheck disable=SC2015
+    llama_check_commands \
     cmake "cmake" \
     gcc "gcc" \
     g++ "g++" \
     python3 "python3" \
-    && llama_ok "构建工具检查通过" || exit 1
+    && llama_ok "构建工具检查通过" || llama_die "构建工具检查失败"
 
 # ninja 在 Debian/Ubuntu 上可能安装为 ninja-build
 if ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null; then
-    llama_err "缺少 ninja 或 ninja-build"
-    exit 1
+    llama_die "缺少 ninja 或 ninja-build"
 fi
 
 if ! command -v nvcc &>/dev/null; then
@@ -102,13 +90,13 @@ else
     llama_detail "NVCC: $(nvcc --version 2>/dev/null | tail -1)"
 fi
 
-llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || exit 1
-llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || exit 1
+llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die "llama.cpp 源码目录不存在"
+llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die "llama.cpp CMakeLists.txt 不存在"
 
-llama_check_gpu || true
+llama_check_gpu || :
 
 # --- 磁盘空间检查 --------------------------------------------
-llama_check_disk_space "$LLAMA_CPP_SRC" || exit 1
+llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die "磁盘空间不足"
 
 # --- 动态检测 ------------------------------------------------
 BUILD_DIR="${LLAMA_CPP_SRC}/build"
@@ -171,7 +159,6 @@ llama_step "步骤 2/4：CMake 配置"
 
 llama_info "运行 CMake 配置..."
 
-set +e
 # 条件性添加 CUDA 库 RPATH（仅当 CUDA_LIB_DIR 非空时）
 if [[ -n "$CUDA_LIB_DIR" ]]; then
     CMAKE_EXTRA_ARGS=("-DCMAKE_BUILD_RPATH=$CUDA_LIB_DIR")
@@ -179,32 +166,25 @@ else
     CMAKE_EXTRA_ARGS=()
 fi
 
-cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
+llama_run_silent cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_C_COMPILER="$GCC_PATH" \
     -DCMAKE_CXX_COMPILER="$GXX_PATH" \
-    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
     -DLLAMA_BUILD_TESTS=OFF \
     -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DGGML_NATIVE=ON \
-    -DGGML_BLAS=ON \
-    -DGGML_BLAS_VENDOR=OpenBLAS \
+    -DGGML_NATIVE="${GGML_NATIVE}" \
+    -DGGML_BLAS="${GGML_BLAS}" \
+    -DGGML_BLAS_VENDOR="${GGML_BLAS_VENDOR}" \
     -DGGML_CUDA=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="75" \
-    -DCMAKE_CUDA_FLAGS="--threads=0" \
-    -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
-    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}" \
+    -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
+    -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
+    -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
     "${CMAKE_EXTRA_ARGS[@]}"
-
 CMAKE_EXIT=$?
-set -e
 
 if [[ "$CMAKE_EXIT" -ne 0 ]]; then
-    llama_err "CMake 配置失败 (退出码: $CMAKE_EXIT)"
-    llama_detail "请检查上方错误信息，常见问题："
-    llama_detail "  - CUDA 工具链未正确安装"
-    llama_detail "  - OpenBLAS 开发包未安装 (libopenblas-dev)"
-    llama_detail "  - GCC 版本与 CUDA 不兼容"
-    exit 1
+    llama_die "CMake 配置失败 (退出码: $CMAKE_EXIT)"
 fi
 
 llama_ok "CMake 配置完成"
@@ -212,120 +192,136 @@ llama_ok "CMake 配置完成"
 # --- 步骤 3：编译 --------------------------------------------
 llama_step "步骤 3/4：编译（${JOBS} 核并行）"
 
-set +e
-cmake --build "$BUILD_DIR" --config Release -j "$JOBS"
+llama_run_silent cmake --build "$BUILD_DIR" --config Release -j "$JOBS"
 BUILD_EXIT=$?
-set -e
 
 if [[ "$BUILD_EXIT" -ne 0 ]]; then
-    llama_err "编译失败 (退出码: $BUILD_EXIT)"
-    llama_detail "请检查上方编译错误"
-    exit 1
+    llama_die "编译失败 (退出码: $BUILD_EXIT)"
 fi
 
 llama_ok "编译完成"
 
+# --- 辅助函数 ------------------------------------------------
+_human_size() {
+    local bytes=$1
+    if ((bytes >= 1073741824)); then
+        local gb=$((bytes / 1073741824))
+        local frac=$(( (bytes % 1073741824) * 10 / 1073741824 ))
+        echo "${gb}.${frac}GiB"
+    elif ((bytes >= 1048576)); then
+        echo "$((bytes / 1048576))MiB"
+    elif ((bytes >= 1024)); then
+        echo "$((bytes / 1024))KiB"
+    else
+        echo "${bytes}B"
+    fi
+}
+
+# --- 验证构建 ------------------------------------------------
+verify_build() {
+    local errors=0
+    local bin_dir="${BUILD_DIR}/bin"
+
+    # 检查关键二进制文件
+    for binary in llama-cli llama-server; do
+        local bin_path="${bin_dir}/${binary}"
+        if [[ -x "$bin_path" ]]; then
+            local size_bytes=
+            size_bytes=$(llama_file_size "$bin_path")
+            if [[ -n "$size_bytes" ]]; then
+                local bin_size
+                bin_size=$(_human_size "$size_bytes")
+            else
+                local bin_size="unknown"
+            fi
+            llama_ok "二进制文件: ${binary} (${bin_size})"
+        else
+            llama_err "二进制文件未生成: ${binary}"
+            ((errors++)) || :
+        fi
+    done
+
+    # 检查 CUDA 链接
+    llama_info "CUDA 链接检查:"
+    if [[ -x "${bin_dir}/llama-cli" ]]; then
+        if ldd "${bin_dir}/llama-cli" 2>/dev/null | grep -qE "libcudart|libcublas|libcuda"; then
+            ldd "${bin_dir}/llama-cli" | grep -E "libcudart|libcublas|libcuda" | while IFS= read -r line; do
+                llama_detail "$line"
+            done
+            llama_ok "CUDA 链接正常"
+        else
+            llama_warn "未找到 CUDA 动态库链接（可能是静态链接）"
+        fi
+    else
+        llama_warn "llama-cli 不存在，跳过 CUDA 链接检查"
+    fi
+
+    # 检查 OpenBLAS 链接
+    llama_info "OpenBLAS 链接检查:"
+    if [[ -x "${bin_dir}/llama-cli" ]]; then
+        if ldd "${bin_dir}/llama-cli" 2>/dev/null | grep -qiE "openblas|blas"; then
+            ldd "${bin_dir}/llama-cli" | grep -iE "openblas|blas" | while IFS= read -r line; do
+                llama_detail "$line"
+            done
+            llama_ok "OpenBLAS 链接正常"
+        else
+            llama_warn "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
+        fi
+    else
+        llama_warn "llama-cli 不存在，跳过 OpenBLAS 链接检查"
+    fi
+
+    # 验证二进制文件可执行性
+    llama_info "验证二进制文件可执行性："
+    if "${bin_dir}/llama-cli" --version &>/dev/null; then
+        llama_ok "llama-cli 可正常启动"
+    else
+        llama_warn "llama-cli 启动验证失败"
+    fi
+
+    # 检查可用设备 (llama-bench --help 会触发 CUDA 初始化并打印设备信息)
+    llama_info "可用设备："
+    if [[ -x "${bin_dir}/llama-bench" ]]; then
+        local bench_output
+        bench_output=$("${bin_dir}/llama-bench" --help 2>&1 || :)
+        if echo "$bench_output" | grep -q "found [0-9]* CUDA devices"; then
+            echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
+                llama_detail "$line"
+            done
+            llama_ok "CUDA 设备检测完成"
+        else
+            llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
+        fi
+    else
+        llama_warn "未找到 llama-bench，跳过设备检测"
+    fi
+
+    # 验证 OpenBLAS 运行时可用性
+    llama_info "OpenBLAS 运行时验证："
+    local openblas_lib
+    openblas_lib=$(ldd "${bin_dir}/llama-cli" 2>/dev/null | grep -oE '/[^ ]+libopenblas[^ ]*' | head -1)
+    if [[ -n "$openblas_lib" ]]; then
+        if python3 -c "import ctypes; ctypes.CDLL('$openblas_lib')" 2>/dev/null; then
+            llama_ok "OpenBLAS 可正常加载"
+        else
+            llama_warn "OpenBLAS 动态加载失败"
+        fi
+    else
+        llama_warn "未检测到 OpenBLAS 动态库路径"
+    fi
+
+    return "$errors"
+}
+
 # --- 步骤 4：验证构建 ----------------------------------------
 llama_step "步骤 4/4：验证构建"
 
-ERRORS=0
-
-# 检查关键二进制文件
-BIN_DIR="${BUILD_DIR}/bin"
-for binary in llama-cli llama-server; do
-    bin_path="${BIN_DIR}/${binary}"
-    if [[ -x "$bin_path" ]]; then
-        size_bytes=
-        size_bytes=$(llama_file_size "$bin_path")
-        if [[ -n "$size_bytes" ]]; then
-            bin_size=$(echo "$size_bytes" | numfmt --to=iec-i 2>/dev/null) || bin_size="${size_bytes}B"
-        else
-            bin_size="unknown"
-        fi
-        llama_ok "二进制文件: ${binary} (${bin_size})"
-    else
-        llama_err "二进制文件未生成: ${binary}"
-        ((ERRORS++)) || true
-    fi
-done
-
-# 检查 CUDA 链接
-llama_info "CUDA 链接检查:"
-if [[ -x "${BIN_DIR}/llama-cli" ]]; then
-    if ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -qE "libcudart|libcublas|libcuda"; then
-        ldd "${BIN_DIR}/llama-cli" | grep -E "libcudart|libcublas|libcuda" | while IFS= read -r line; do
-            llama_detail "$line"
-        done
-        llama_ok "CUDA 链接正常"
-    else
-        llama_warn "未找到 CUDA 动态库链接（可能是静态链接）"
-    fi
-else
-    llama_warn "llama-cli 不存在，跳过 CUDA 链接检查"
+verify_build
+VERIFY_EXIT=$?
+if [[ "$VERIFY_EXIT" -gt 0 ]]; then
+    llama_die "构建验证失败，${VERIFY_EXIT} 个错误"
 fi
-
-# 检查 OpenBLAS 链接
-llama_info "OpenBLAS 链接检查:"
-if [[ -x "${BIN_DIR}/llama-cli" ]]; then
-    if ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -qiE "openblas|blas"; then
-        ldd "${BIN_DIR}/llama-cli" | grep -iE "openblas|blas" | while IFS= read -r line; do
-            llama_detail "$line"
-        done
-        llama_ok "OpenBLAS 链接正常"
-    else
-        llama_warn "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
-    fi
-else
-    llama_warn "llama-cli 不存在，跳过 OpenBLAS 链接检查"
-fi
-
-# 验证二进制文件可执行性
-llama_info "验证二进制文件可执行性："
-if "${BIN_DIR}/llama-cli" --version &>/dev/null; then
-    llama_ok "llama-cli 可正常启动"
-else
-    llama_warn "llama-cli 启动验证失败"
-fi
-
-# 检查可用设备 (llama-bench --help 会触发 CUDA 初始化并打印设备信息)
-llama_info "可用设备："
-if [[ -x "${BIN_DIR}/llama-bench" ]]; then
-    BENCH_OUTPUT=$("${BIN_DIR}/llama-bench" --help 2>&1 || true)
-    if echo "$BENCH_OUTPUT" | grep -q "found [0-9]* CUDA devices"; then
-        echo "$BENCH_OUTPUT" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
-            llama_detail "$line"
-        done
-        llama_ok "CUDA 设备检测完成"
-    else
-        llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
-    fi
-else
-    llama_warn "未找到 llama-bench，跳过设备检测"
-fi
-
-# 验证 OpenBLAS 运行时可用性
-llama_info "OpenBLAS 运行时验证："
-OPENBLAS_LIB=$(ldd "${BIN_DIR}/llama-cli" 2>/dev/null | grep -oE '/[^ ]+libopenblas[^ ]*' | head -1)
-if [[ -n "$OPENBLAS_LIB" ]]; then
-    if python3 -c "import ctypes; ctypes.CDLL('$OPENBLAS_LIB')" 2>/dev/null; then
-        llama_ok "OpenBLAS 可正常加载"
-    else
-        llama_warn "OpenBLAS 动态加载失败"
-    fi
-else
-    llama_warn "未检测到 OpenBLAS 动态库路径"
-fi
-
-# 汇总
-if [[ "$ERRORS" -gt 0 ]]; then
-    llama_err "构建验证失败，${ERRORS} 个错误"
-    exit 1
-fi
-
-# 写入构建标记（用于 update.sh 验证构建是否与源码匹配）
-git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || true
-
-llama_cleanup_trap
+git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || :
 llama_release_lock
-
+# shellcheck disable=SC2153
 echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BIN_DIR}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BIN_DIR}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"

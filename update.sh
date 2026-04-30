@@ -6,16 +6,13 @@
 # ============================================================
 
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/common.sh"
-# shellcheck source=/dev/null
-source "${SCRIPT_DIR}/config.sh"
+llama_source_deps
 
 # --- 文件锁定 ------------------------------------------------
-llama_acquire_lock || exit 1
+llama_acquire_lock || llama_die "无法获取文件锁"
 
 # 确保所有退出路径都释放文件锁（包括正常退出和 set -e 触发的异常退出）
 trap 'llama_release_lock' EXIT
@@ -34,25 +31,15 @@ ORIG_DIR=""
 
 # --- 帮助信息 ------------------------------------------------
 show_help() {
-    cat <<EOF
-用法: $(basename "$0") [tag|commit]
-
-描述:
-  将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。
-
-参数:
-  tag|commit    可选。指定要更新到的标签或 commit SHA。
-                如果不提供，自动查询 GitHub 最新 release。
-
-选项:
-  -h, --help    显示此帮助信息
-
-示例:
-  bash update.sh                    # 更新到最新 release
+    llama_show_help \
+        "$(basename "$0")" \
+        "将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。" \
+        "  -h, --help      显示此帮助信息
+      --version   显示版本信息" \
+        "  bash update.sh                    # 更新到最新 release
   bash update.sh b3631              # 更新到指定 commit
   bash update.sh b8941              # 更新到指定标签
-  bash update.sh --help             # 显示帮助
-EOF
+  bash update.sh --help             # 显示帮助"
 }
 
 # --- 工具函数 ------------------------------------------------
@@ -109,6 +96,7 @@ cleanup_stale_submodules() {
         # 确认是 submodule 的 gitlink 文件（内容为 gitdir:...）
         if grep -q '^gitdir:' "${LLAMA_CPP_SRC}/${gitlink}" 2>/dev/null; then
             llama_info "清理旧子模块残留: ${mod_dir}"
+            # shellcheck disable=SC2115
             rm -rf "${LLAMA_CPP_SRC}/${gitlink}" "${LLAMA_CPP_SRC}/${mod_dir}"
             # 清理 .git/modules/ 中对应的条目
             local git_modules_dir="${LLAMA_CPP_SRC}/.git/modules/${mod_dir}"
@@ -116,7 +104,7 @@ cleanup_stale_submodules() {
                 rm -rf "$git_modules_dir"
                 llama_detail "清理 .git/modules: ${mod_dir}"
             fi
-            ((stale_count++)) || true
+            ((stale_count++)) || :
         fi
     done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
 
@@ -187,7 +175,7 @@ fetch_latest_release_curl() {
     if [[ "$http_code" != "200" ]]; then
         llama_err "GitHub API 请求失败 (HTTP ${http_code})"
         if [[ -s "$tmp" ]]; then
-            cat "$tmp" >&2 || true
+            cat "$tmp" >&2 || :
         fi
         return 1
     fi
@@ -215,6 +203,11 @@ if (($# > 0)); then
             llama_release_lock
             exit 0
             ;;
+        --version)
+            llama_show_version
+            llama_release_lock
+            exit 0
+            ;;
         *)
             TARGET_VERSION="$1"
             ;;
@@ -228,14 +221,15 @@ fi
 # 前置检查
 llama_info "检查前置条件..."
 
-llama_check_commands \
+# shellcheck disable=SC2015
+    llama_check_commands \
     git "git" \
     python3 "python3" \
-    && llama_ok "基础工具检查通过" || exit 1
+    && llama_ok "基础工具检查通过" || llama_die "基础工具检查失败"
 
-llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 仓库" || exit 1
-llama_check_file "${LLAMA_CPP_SRC}/.git/config" "Git 仓库配置" || exit 1
-llama_check_file "$BUILD_SCRIPT" "构建脚本" || exit 1
+llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 仓库" || llama_die "llama.cpp 仓库不存在"
+llama_check_file "${LLAMA_CPP_SRC}/.git/config" "Git 仓库配置" || llama_die "所需文件不存在"
+llama_check_file "$BUILD_SCRIPT" "构建脚本" || llama_die "所需文件不存在"
 
 # 检查本地仓库状态
 llama_info "检查本地仓库状态..."
@@ -246,35 +240,34 @@ cd "$LLAMA_CPP_SRC" >/dev/null
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
     llama_err "检测到未提交的更改，请先处理后再更新:"
     git status --short
-    cd "$ORIG_DIR" >/dev/null
-    llama_release_lock
-    exit 1
+    cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+    llama_die ""
 fi
 
 # 检查子模块中的未提交更改
 if git submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null | grep -q 'DIRTY'; then
     llama_err "子模块中存在未提交的更改，请先处理后再更新:"
-    git submodule foreach 'git status --short' 2>/dev/null || true
-    cd "$ORIG_DIR" >/dev/null
-    llama_release_lock
-    exit 1
+    git submodule foreach 'git status --short' 2>/dev/null || :
+    cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+    llama_die ""
 fi
 
 save_state
+llama_setup_trap cleanup_on_interrupt
 
 # 中断恢复陷阱
 cleanup_on_interrupt() {
     llama_warn "更新被中断，正在恢复..."
     llama_cleanup_trap
     if [[ -n "${CURRENT_COMMIT:-}" ]]; then
-        git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || true
-        git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
+        git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || :
+        git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || :
     fi
-    cd "$ORIG_DIR" >/dev/null
-    llama_release_lock
-    exit 130
+    if [[ -n "${ORIG_DIR:-}" ]]; then
+        cd "$ORIG_DIR" >/dev/null
+    fi
+    llama_safe_exit 130
 }
-llama_setup_trap cleanup_on_interrupt
 
 ACTUAL_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
 if [[ "$ACTUAL_REMOTE" != "$REPO_URL" && "$ACTUAL_REMOTE" != "${REPO_URL}.git" ]]; then
@@ -305,17 +298,15 @@ else
         if ! fetch_latest_release_gh; then
             llama_warn "gh 查询失败，回退到 curl"
             if ! fetch_latest_release_curl; then
-                cd "$ORIG_DIR" >/dev/null
-                llama_release_lock
-                exit 1
+                cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+                llama_die ""
             fi
         fi
     else
         llama_warn "gh 未安装或未登录，使用 curl 直接访问 API"
         if ! fetch_latest_release_curl; then
-            cd "$ORIG_DIR" >/dev/null
-            llama_release_lock
-            exit 1
+            cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+            llama_die ""
         fi
     fi
 
@@ -323,7 +314,13 @@ else
 fi
 
 # 显示版本信息
-RELEASE_SHORT="${RELEASE_COMMIT:0:7}"
+if [[ ${#RELEASE_COMMIT} -ge 7 ]]; then
+    RELEASE_SHORT="${RELEASE_COMMIT:0:7}"
+elif [[ -n "${RELEASE_COMMIT:-}" ]]; then
+    RELEASE_SHORT="${RELEASE_COMMIT}"
+else
+    RELEASE_SHORT="unknown"
+fi
 llama_detail "目标版本:    ${RELEASE_TAG}"
 if [[ -n "$RELEASE_COMMIT" ]] && is_full_commit_sha "$RELEASE_COMMIT"; then
     llama_detail "对应 Commit: ${RELEASE_SHORT} (${RELEASE_COMMIT})"
@@ -369,22 +366,20 @@ if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
     llama_info "正在从远程仓库拉取最新引用..."
 
     llama_with_network_context "从远程仓库拉取标签" git fetch origin --quiet --tags || {
-        cd "$ORIG_DIR" >/dev/null
-        llama_release_lock
-        exit 1
+        cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+        llama_die ""
     }
 
     # 尝试 fetch 特定标签（如果是标签的话）
     if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "."; then
-        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
+        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || :
     fi
 
     if ! git rev-parse --verify "${RELEASE_TAG}^{commit}" &>/dev/null; then
         llama_err "本地找不到目标版本: ${RELEASE_TAG}"
         llama_detail "请确认版本号正确，或检查网络连接"
-        cd "$ORIG_DIR" >/dev/null
-        llama_release_lock
-        exit 1
+        cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+        llama_die ""
     fi
 
     llama_info "切换到版本 ${RELEASE_TAG}..."
@@ -413,9 +408,8 @@ if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
         if ! git submodule update --init --recursive --quiet; then
             llama_err "子模块同步失败"
             rollback
-            cd "$ORIG_DIR" >/dev/null
-            llama_release_lock
-            exit 1
+            cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+            llama_die ""
         fi
         llama_ok "子模块已同步"
     else
@@ -435,10 +429,8 @@ echo "=========================================="
 echo ""
 
 llama_release_lock
-set +e
-bash "$BUILD_SCRIPT"
+llama_run_silent bash "$BUILD_SCRIPT"
 BUILD_STATUS=$?
-set -e
 
 if [[ "$BUILD_STATUS" -ne 0 ]]; then
     rollback
@@ -448,10 +440,8 @@ if [[ "$BUILD_STATUS" -ne 0 ]]; then
     echo "  回滚后重新构建..."
     echo "=========================================="
     echo ""
-    set +e
-    bash "$BUILD_SCRIPT"
+    llama_run_silent bash "$BUILD_SCRIPT"
     ROLLBACK_BUILD_STATUS=$?
-    set -e
     if [[ "$ROLLBACK_BUILD_STATUS" -ne 0 ]]; then
         llama_err "回滚后构建也失败"
         llama_detail "当前状态:"
@@ -465,9 +455,8 @@ if [[ "$BUILD_STATUS" -ne 0 ]]; then
         llama_detail "  git checkout ${CURRENT_COMMIT}"
         llama_detail "  git submodule update --recursive"
         llama_detail "  bash ${BUILD_SCRIPT}"
-        cd "$ORIG_DIR" >/dev/null
-        llama_release_lock
-        exit 1
+        cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+        llama_die ""
     fi
     llama_warn "更新失败但已回滚并重新构建成功"
     echo ""
@@ -482,9 +471,8 @@ if [[ "$BUILD_STATUS" -ne 0 ]]; then
     echo "  source ${SCRIPT_DIR}/run_env.sh"
     echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
     echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
-    cd "$ORIG_DIR" >/dev/null
-    llama_release_lock
-    exit 1
+    cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+    llama_die ""
 fi
 
 # 构建成功
@@ -509,6 +497,5 @@ echo "  source ${SCRIPT_DIR}/run_env.sh"
 echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
 echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
 
-llama_cleanup_trap
-cd "$ORIG_DIR" >/dev/null
-llama_release_lock
+cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+llama_safe_exit 0

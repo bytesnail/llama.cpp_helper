@@ -18,19 +18,38 @@ fi
 # 因为 source 时退出会影响当前 shell
 
 # 加载 common.sh
-_SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
-if [[ -z "$_SCRIPT_PATH" ]]; then
-    echo "[ERROR] 无法确定脚本路径，请从脚本所在目录运行" >&2
-    return 1 2>/dev/null || exit 1
-fi
-SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT_PATH")" > /dev/null && pwd)"
-if [[ ! -f "${SCRIPT_DIR}/common.sh" ]]; then
-    echo "[ERROR] 未找到 common.sh: ${SCRIPT_DIR}/common.sh" >&2
+# Record which color vars NOT yet set — these will be introduced by common.sh
+# Also save pre-existing values so we can restore them after cleanup
+_COMMON_SH_INTRODUCED_VARS=()
+_COMMON_SH_SAVED_COLORS=()
+for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+    if [[ -z "${!_v+x}" ]]; then
+        _COMMON_SH_INTRODUCED_VARS+=("$_v")
+    else
+        _COMMON_SH_SAVED_COLORS+=("$_v=${!_v}")
+    fi
+done
+unset _v
+
+# Bootstrap: find and source common.sh (shared helpers not yet available)
+_BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" > /dev/null && pwd)"
+if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
+    echo "[ERROR] 未找到 common.sh: ${_BOOT_DIR}/common.sh" >&2
+    # shellcheck disable=SC2317
     return 1 2>/dev/null || exit 1
 fi
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/common.sh"
-unset SCRIPT_DIR _SCRIPT_PATH
+source "${_BOOT_DIR}/common.sh"
+unset _BOOT_DIR
+
+# Now shared helpers are available — properly set SCRIPT_DIR
+llama_init_script_dir
+
+# Source config.sh for version info (used by llama_show_version)
+if [[ -f "${SCRIPT_DIR}/config.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/config.sh"
+fi
 
 # --- 环境变量定义 --------------------------------------------
 # 使用关联数组定义所有要设置的环境变量
@@ -42,23 +61,15 @@ declare -A LLAMA_ENV_VARS=(
 
 # --- 帮助信息 ------------------------------------------------
 show_help() {
-    cat <<EOF
-用法: source $(basename "${BASH_SOURCE[0]}") [选项]
-
-描述:
-  设置 llama.cpp 运行时环境变量，优化双 GPU NVLink 性能。
-
-选项:
-  -s, --status    显示当前环境变量状态（不设置）
+    llama_show_help \
+        "source $(basename "${BASH_SOURCE[0]}")" \
+        "设置 llama.cpp 运行时环境变量，优化双 GPU NVLink 性能。" \
+        "  -s, --status    显示当前环境变量状态（不设置）
   -h, --help      显示此帮助信息
-
-示例:
-  source run_env.sh              # 加载环境变量
+      --version   显示版本信息" \
+        "  source run_env.sh              # 加载环境变量
   source run_env.sh --status     # 查看当前状态
-  source run_env.sh --help       # 显示帮助
-
-已设置的环境变量:
-EOF
+  source run_env.sh --help       # 显示帮助"
     show_env_vars
 }
 
@@ -89,12 +100,17 @@ main() {
                 ;;
             -h|--help)
                 show_help
-                return 0 2>/dev/null || exit 0
+                return 0
+                ;;
+            --version)
+                source "${SCRIPT_DIR}/config.sh" 2>/dev/null || true
+                llama_show_version
+                return 0
                 ;;
             *)
                 llama_err "未知选项: $1"
                 show_help
-                return 1 2>/dev/null || exit 1
+                return 1
                 ;;
         esac
     fi
@@ -113,7 +129,7 @@ main() {
         else
             llama_warn "未找到 nvidia-smi"
         fi
-        return 0 2>/dev/null || exit 0
+        return 0
     fi
 
     # --- 设置环境变量 --------------------------------------------
@@ -168,6 +184,21 @@ EOF
 }
 
 main "$@"
+_main_rc=$?
 
 # 清理 common.sh 留下的颜色变量，防止污染父 shell
-unset RED GREEN YELLOW CYAN BLUE BOLD NC 2>/dev/null || true
+# Only unset color vars that common.sh introduced (not pre-existing parent shell vars)
+for _v in "${_COMMON_SH_INTRODUCED_VARS[@]:-}"; do
+    unset "$_v"
+done
+
+# Restore pre-existing color vars that common.sh overwrote
+for _saved in "${_COMMON_SH_SAVED_COLORS[@]+"${_COMMON_SH_SAVED_COLORS[@]}"}"; do
+    [[ -z "${_saved:-}" ]] && continue
+    _name="${_saved%%=*}"
+    _val="${_saved#*=}"
+    printf -v "$_name" '%s' "$_val"
+done
+unset _v _saved _name _val _COMMON_SH_INTRODUCED_VARS _COMMON_SH_SAVED_COLORS 2>/dev/null || :
+
+llama_return_or_exit ${_main_rc:-0}
