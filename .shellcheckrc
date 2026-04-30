@@ -1,0 +1,12 @@
+# bash version target (project requires Bash >= 4.2 for declare -A and [[ -v ]])
+shell=bash
+
+# Allow external source directives
+external-sources=true
+
+# Source path for shellcheck source resolution
+source-path=.
+
+# Warnings to exclude
+# SC2312: "Consider invoking this command separately" (pipefail grep patterns are intentional)
+disable=SC2034,SC2312
