@@ -20,6 +20,9 @@ source "${SCRIPT_DIR}/config.sh"
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || exit 1
 
+# 确保所有退出路径都释放文件锁（包括正常退出和 set -e 触发的异常退出）
+trap 'llama_release_lock' EXIT
+
 # --- 退出清理 ------------------------------------------------
 cleanup_on_exit() {
     local exit_code=$?

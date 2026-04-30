@@ -123,20 +123,38 @@ llama_acquire_lock() {
         llama_err "未指定锁文件路径"
         return 1
     fi
+    # 在打开文件之前读取现有 PID（exec {fd}> 会清空文件内容）
+    local holder_pid
+    holder_pid=$(cat "$lock_file" 2>/dev/null || true)
+    
     # 使用动态 fd，bash 自动设置 close-on-exec，防止子进程继承
     local fd
     exec {fd}>"$lock_file"
     if ! flock -n "$fd"; then
-        # 锁被占用，尝试读取持有者 PID 用于诊断
-        local holder_pid holder_cmd
-        holder_pid=$(cat "$lock_file" 2>/dev/null || true)
+        # 锁被占用，使用预先读取的 PID 进行诊断
+        local holder_cmd
         if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
             holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
             llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
         else
-            # 锁文件中的 PID 已不存在，但 flock 仍被持有，说明是其他进程继承了 fd
-            llama_err "另一个进程正在运行，请等待其完成"
-            llama_detail "提示: 如果确认无其他更新/构建进程在运行，可手动删除锁文件: rm -f ${lock_file}"
+            # 锁文件中的 PID 已不存在（或无法读取），但 flock 仍被持有
+            # 尝试强制清理：删除锁文件并重建，绕过旧 inode 上的 flock
+            llama_warn "检测到残留锁（原持有者 PID ${holder_pid:-未知} 已不存在）"
+            llama_detail "尝试自动清理残留锁..."
+            exec {fd}>&- 2>/dev/null || true
+            rm -f "$lock_file"
+            exec {fd}>"$lock_file"
+            if ! flock -n "$fd"; then
+                llama_err "自动清理失败，锁仍然被占用"
+                llama_detail "请手动检查是否有其他进程在使用该锁文件"
+                llama_detail "可尝试: rm -f ${lock_file}"
+                exec {fd}>&- 2>/dev/null || true
+                return 1
+            fi
+            llama_ok "残留锁已自动清理，继续执行"
+            echo $$ >&"$fd"
+            LOCK_FD=$fd
+            return 0
         fi
         exec {fd}>&- 2>/dev/null || true
         return 1
@@ -154,6 +172,10 @@ llama_release_lock() {
     if [[ -n "${LOCK_FD:-}" ]]; then
         exec {LOCK_FD}>&- 2>/dev/null || true
         unset LOCK_FD
+    fi
+    # 清理锁文件，防止残留
+    if [[ -n "${LOCK_FILE:-}" ]]; then
+        rm -f "$LOCK_FILE"
     fi
 }
 
