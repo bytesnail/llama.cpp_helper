@@ -22,6 +22,7 @@
 - OpenBLAS ≥ 0.3.25
 - Python 3
 - Git
+- **Bash >= 4.2** (required for associative arrays and `[[ -v ]]` variable tests)
 
 > **磁盘空间要求**：构建需要至少 10GB 可用空间（脚本会自动检查）。
 
@@ -41,12 +42,35 @@ export LLAMA_CPP_SRC="/your/path/to/llama.cpp"
 bash build.sh
 ```
 
+#### 可配置构建选项
+
+以下变量可在运行 `build.sh` 前通过环境变量覆盖：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CMAKE_BUILD_TYPE` | `Release` | 构建类型 |
+| `CMAKE_CUDA_ARCHITECTURES` | `75` | CUDA 目标架构 (sm_75) |
+| `GGML_CUDA_PEER_MAX_BATCH_SIZE` | `512` | NVLink P2P 批量大小 |
+| `GGML_CUDA_FA_ALL_QUANTS` | `ON` | 全量化 FlashAttention |
+| `GGML_NATIVE` | `ON` | 本机 CPU 优化 |
+| `GGML_BLAS` | `ON` | 启用 BLAS |
+| `GGML_BLAS_VENDOR` | `OpenBLAS` | BLAS 库供应商 |
+
+```bash
+# 为不同 GPU 架构构建
+CMAKE_CUDA_ARCHITECTURES="86" bash build.sh
+
+# 禁用 OpenBLAS（仅 CUDA）
+GGML_BLAS="OFF" bash build.sh
+```
+
 ### 核心脚本
 
 #### `build.sh` - 构建 llama.cpp
 
 使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS + CUDA 双后端。
 
+支持 `--version` 查看版本。
 ```bash
 # 完整重新构建（清理 + 配置 + 编译）
 bash build.sh
@@ -79,6 +103,7 @@ bash build.sh --help
 
 查询 GitHub 最新构建标签（build tag），自动拉取、切换、同步子模块并重新构建。
 
+支持 `--version` 查看版本。
 ```bash
 # 更新到最新构建标签
 bash update.sh
@@ -110,6 +135,7 @@ bash update.sh --help
 
 设置 llama.cpp 运行时性能优化参数。
 
+支持 `--version` 查看版本。
 ```bash
 # 加载环境变量
 source run_env.sh
@@ -251,13 +277,41 @@ git submodule update --recursive
 ```
 llama.cpp_helper/
 ├── common.sh       # 共享工具库
-├── config.sh       # 配置文件（路径定义）
+├── config.sh       # 配置（路径 + 构建常量）
 ├── build.sh        # 构建脚本
 ├── update.sh       # 更新脚本
 ├── run_env.sh      # 运行时环境
-└── README.md       # 本文档
-```
+├── Makefile        # lint/test/check
+├── .shellcheckrc   # ShellCheck 配置
+├── tests/          # bats-core 测试套件
+│   ├── test_helper.bash
+│   ├── test_smoke.bats
+│   ├── test_common.bats
+│   ├── test_build.bats
+│   ├── test_update.bats
+│   └── test_run_env.bats
+└── README.md
 
 ## 许可证
 
 与 llama.cpp 相同（MIT）。
+
+## 开发
+
+```bash
+# ShellCheck 静态分析
+make lint
+
+# bash -n 语法检查
+make syntax
+
+# 运行测试套件
+make test
+
+# 全部检查（lint + syntax + test）
+make check
+```
+
+**测试依赖：** 需要安装 `bats-core` 和 `shellcheck`。
+
+**Bash 版本要求：** 本项目使用 Bash >= 4.2 特性（关联数组 `declare -A`、`[[ -v ]]` 变量测试）。
