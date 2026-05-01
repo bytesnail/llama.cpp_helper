@@ -88,6 +88,7 @@ llama_check_file() {
 }
 
 # --- CPU Detection -------------------------------------------
+# Usage: llama_get_cpu_count
 llama_get_cpu_count() {
     local ncpu
     ncpu=$(nproc 2>/dev/null) || \
@@ -98,6 +99,7 @@ llama_get_cpu_count() {
 }
 
 # --- GPU Detection -------------------------------------------
+# Usage: llama_check_gpu
 llama_check_gpu() {
     if command -v nvidia-smi &>/dev/null; then
         local gpu_count
@@ -116,10 +118,39 @@ llama_check_gpu() {
 
 # --- File Locking --------------------------------------------
 # 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
-# Usage: llama_acquire_lock [lock_file]
-# Returns 0 on success, 1 if lock is held by another process
+
+# Usage: llama_recover_stale_lock <lock_file>
+# Attempts to recover a stale lock. Returns 0 on success (LOCK_FD set), 1 on failure.
+llama_recover_stale_lock() {
+    local lock_file="$1"
+    local holder_pid
+    holder_pid=$(cat "$lock_file" 2>/dev/null || :)
+
+    llama_warn "检测到残留锁（原持有者 PID ${holder_pid:-未知} 已不存在）"
+    llama_detail "尝试自动清理残留锁..."
+
+    rm -f "$lock_file"
+    local fd
+    exec {fd}>>"$lock_file"
+
+    if ! flock -n "$fd"; then
+        llama_err "自动清理失败，锁仍然被占用"
+        llama_detail "请手动检查是否有其他进程在使用该锁文件"
+        llama_detail "可尝试: rm -f ${lock_file}"
+        exec {fd}>&- 2>/dev/null || :
+        return 1
+    fi
+
+    llama_ok "残留锁已自动清理，继续执行"
+    : > "$lock_file"
+    echo $$ >&"$fd"
+    LOCK_FD=$fd
+    return 0
+}
+
+# Usage: llama_acquire_lock [lock_file] — returns 0 on success, 1 if lock held
 llama_acquire_lock() {
-    local lock_file="${1:-$LOCK_FILE}"
+    local lock_file="${1:-$LOCK_FILE}"  # defaults to script-level LOCK_FILE
     if [[ -z "$lock_file" ]]; then
         llama_err "未指定锁文件路径"
         return 1
@@ -144,24 +175,9 @@ llama_acquire_lock() {
             holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
             llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
         else
-            # Stale lock holder — attempt recovery
-            llama_warn "检测到残留锁（原持有者 PID ${holder_pid:-未知} 已不存在）"
-            llama_detail "尝试自动清理残留锁..."
             exec {fd}>&- 2>/dev/null || :
-            rm -f "$lock_file"
-            exec {fd}>>"$lock_file"
-            if ! flock -n "$fd"; then
-                llama_err "自动清理失败，锁仍然被占用"
-                llama_detail "请手动检查是否有其他进程在使用该锁文件"
-                llama_detail "可尝试: rm -f ${lock_file}"
-                exec {fd}>&- 2>/dev/null || :
-                return 1
-            fi
-            llama_ok "残留锁已自动清理，继续执行"
-            : > "$lock_file"
-            echo $$ >&"$fd"
-            LOCK_FD=$fd
-            return 0
+            llama_recover_stale_lock "$lock_file"
+            return $?
         fi
         exec {fd}>&- 2>/dev/null || :
         return 1
@@ -264,7 +280,26 @@ llama_file_size() {
     echo "$size"
 }
 
+# --- Human-readable size --------------------------------------
+# Usage: llama_human_size <bytes>
+# Converts byte count to human-readable format (KiB/MiB/GiB)
+llama_human_size() {
+    local bytes=$1
+    if ((bytes >= 1073741824)); then
+        local gb=$((bytes / 1073741824))
+        local frac=$(( (bytes % 1073741824) * 10 / 1073741824 ))
+        echo "${gb}.${frac}GiB"
+    elif ((bytes >= 1048576)); then
+        echo "$((bytes / 1048576))MiB"
+    elif ((bytes >= 1024)); then
+        echo "$((bytes / 1024))KiB"
+    else
+        echo "${bytes}B"
+    fi
+}
+
 # --- Exit Helpers ---------------------------------------------
+# Usage: llama_die [message] [exit_code]
 llama_die() {
     local msg="${1:-}"
     local code="${2:-1}"
@@ -276,6 +311,7 @@ llama_die() {
     exit "$code"
 }
 
+# Usage: llama_safe_exit [exit_code]
 llama_safe_exit() {
     local code="${1:-0}"
     llama_cleanup_trap
@@ -283,10 +319,11 @@ llama_safe_exit() {
     exit "$code"
 }
 
+# Usage: llama_return_or_exit <exit_code>
 llama_return_or_exit() {
     local code="$1"
-    # shellcheck disable=SC2317
-    return "$code" 2>/dev/null || exit "$code"
+    # In sourced context: return succeeds. In executed script: return fails, fall to exit.
+    { return "$code"; } 2>/dev/null || exit "$code"
 }
 
 # --- Init/Source/Help Helpers --------------------------------
@@ -334,9 +371,13 @@ llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
 }
 
+# Usage: llama_run_silent <command> [args...]
 llama_run_silent() {
+    local _prev_opts
+    _prev_opts=$(set +o | grep errexit || true)
     set +e
     "$@"
     local ret=$?
+    eval "$_prev_opts"
     return "$ret"
 }
