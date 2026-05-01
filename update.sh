@@ -141,6 +141,40 @@ check_build_health() {
     return 1
 }
 
+# 打印构建成功的汇总信息
+# 参数: source_updated ("1"=源码已更新, "0"=仅重新构建), current_ver, target_ver, release_date
+_print_success_summary() {
+    local source_updated="$1"
+    local current_ver="$2"
+    local target_ver="$3"
+    local release_date="$4"
+
+    echo ""
+    echo "=========================================="
+    if [[ "$source_updated" -eq 1 ]]; then
+        echo "  llama.cpp 更新并构建完成！"
+    else
+        echo "  构建完成！"
+    fi
+    echo "=========================================="
+    echo ""
+    if [[ "$source_updated" -eq 1 ]]; then
+        echo "  更新: ${current_ver} → ${target_ver}"
+        echo "  版本: ${target_ver}"
+        if [[ -n "$release_date" ]]; then
+            echo "  发布: ${release_date}"
+        fi
+    else
+        echo "  版本: ${current_ver}"
+        echo "  状态: 重新构建完成"
+    fi
+    echo ""
+    echo "运行示例:"
+    echo "  source ${SCRIPT_DIR}/run_env.sh"
+    echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
+    echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
+}
+
 # --- GitHub API 查询 -----------------------------------------
 fetch_latest_release_gh() {
     local json
@@ -255,7 +289,8 @@ fi
 save_state
 llama_setup_trap cleanup_on_interrupt
 
-# 中断恢复陷阱
+# 中断恢复陷阱 — SIGINT/SIGTERM 时恢复到更新前状态
+# llama_safe_exit 130: 130 = 128 + 2 (SIGINT 标准退出码)
 cleanup_on_interrupt() {
     llama_warn "更新被中断，正在恢复..."
     llama_cleanup_trap
@@ -459,43 +494,12 @@ if [[ "$BUILD_STATUS" -ne 0 ]]; then
         llama_die ""
     fi
     llama_warn "更新失败但已回滚并重新构建成功"
-    echo ""
-    echo "=========================================="
-    echo "  回滚并重新构建完成"
-    echo "=========================================="
-    echo ""
-    echo "  当前版本: ${CURRENT_SHORT} (${CURRENT_TAG})"
-    echo "  目标版本: ${RELEASE_TAG} (构建失败，已回滚)"
-    echo ""
-    echo "运行示例:"
-    echo "  source ${SCRIPT_DIR}/run_env.sh"
-    echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
-    echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
+    _print_success_summary 0 "${CURRENT_SHORT} (${CURRENT_TAG})" "${RELEASE_TAG} (构建失败，已回滚)" ""
     cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
     llama_die ""
 fi
-
 # 构建成功
-echo ""
-echo "=========================================="
-echo "  llama.cpp 更新并构建完成！"
-echo "=========================================="
-echo ""
-if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
-    echo "  更新: ${CURRENT_SHORT} → ${ACTUAL_COMMIT:0:7}"
-    echo "  版本: ${RELEASE_TAG}"
-    if [[ -n "$RELEASE_DATE" ]]; then
-        echo "  发布: ${RELEASE_DATE}"
-    fi
-else
-    echo "  版本: ${CURRENT_TAG} (${CURRENT_SHORT})"
-    echo "  状态: 重新构建完成"
-fi
-echo ""
-echo "运行示例:"
-echo "  source ${SCRIPT_DIR}/run_env.sh"
-echo "  ${LLAMA_CPP_SRC}/build/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
-echo "  ${LLAMA_CPP_SRC}/build/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
+_print_success_summary "${NEED_SOURCE_UPDATE}" "${CURRENT_SHORT}" "${RELEASE_TAG}" "${RELEASE_DATE:-}"
 
 cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
 llama_safe_exit 0
