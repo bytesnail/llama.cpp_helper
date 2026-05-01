@@ -18,24 +18,19 @@ fi
 # 因为 source 时退出会影响当前 shell
 
 # 加载 common.sh
-# Record which color vars NOT yet set — these will be introduced by common.sh
-# Also save pre-existing values so we can restore them after cleanup
-_COMMON_SH_INTRODUCED_VARS=()
-_COMMON_SH_SAVED_COLORS=()
+# Save existing color variables to restore after execution
+# (run_env.sh is designed to be sourced; we must not pollute parent shell)
 for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-    if [[ -z "${!_v+x}" ]]; then
-        _COMMON_SH_INTRODUCED_VARS+=("$_v")
-    else
-        _COMMON_SH_SAVED_COLORS+=("$_v=${!_v}")
-    fi
+    printf -v "_LLAMA_SAVED_${_v}" '%s' "${!_v-}"
 done
 unset _v
+
 
 # Bootstrap: find and source common.sh (shared helpers not yet available)
 _BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" > /dev/null && pwd)"
 if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
-    echo "[ERROR] 未找到 common.sh: ${_BOOT_DIR}/common.sh" >&2
     # shellcheck disable=SC2317
+    echo "[ERROR] 未找到 common.sh: ${_BOOT_DIR}/common.sh" >&2
     return 1 2>/dev/null || exit 1
 fi
 # shellcheck source=/dev/null
@@ -103,7 +98,6 @@ main() {
                 return 0
                 ;;
             --version)
-                source "${SCRIPT_DIR}/config.sh" 2>/dev/null || true
                 llama_show_version
                 return 0
                 ;;
@@ -187,18 +181,16 @@ main "$@"
 _main_rc=$?
 
 # 清理 common.sh 留下的颜色变量，防止污染父 shell
-# Only unset color vars that common.sh introduced (not pre-existing parent shell vars)
-for _v in "${_COMMON_SH_INTRODUCED_VARS[@]:-}"; do
-    unset "$_v"
+# Restore color variables to their pre-existing values
+for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+    _saved_var="_LLAMA_SAVED_${_v}"
+    if [[ -n "${!_saved_var+isset}" ]]; then
+        printf -v "$_v" '%s' "${!_saved_var}"
+    else
+        unset "$_v" 2>/dev/null || :
+    fi
+    unset "_LLAMA_SAVED_${_v}"
 done
-
-# Restore pre-existing color vars that common.sh overwrote
-for _saved in "${_COMMON_SH_SAVED_COLORS[@]+"${_COMMON_SH_SAVED_COLORS[@]}"}"; do
-    [[ -z "${_saved:-}" ]] && continue
-    _name="${_saved%%=*}"
-    _val="${_saved#*=}"
-    printf -v "$_name" '%s' "$_val"
-done
-unset _v _saved _name _val _COMMON_SH_INTRODUCED_VARS _COMMON_SH_SAVED_COLORS 2>/dev/null || :
+unset _v _saved_var
 
 llama_return_or_exit ${_main_rc:-0}
