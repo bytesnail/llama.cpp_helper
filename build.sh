@@ -201,19 +201,117 @@ fi
 
 llama_ok "编译完成"
 
-# --- 辅助函数 ------------------------------------------------
-_human_size() {
-    local bytes=$1
-    if ((bytes >= 1073741824)); then
-        local gb=$((bytes / 1073741824))
-        local frac=$(( (bytes % 1073741824) * 10 / 1073741824 ))
-        echo "${gb}.${frac}GiB"
-    elif ((bytes >= 1048576)); then
-        echo "$((bytes / 1048576))MiB"
-    elif ((bytes >= 1024)); then
-        echo "$((bytes / 1024))KiB"
+# --- 验证辅助函数 --------------------------------------------
+
+# 检查单个二进制文件是否存在并报告大小
+# 参数: $1=binary_name, $2=bin_dir
+# 返回: 0=存在, 1=缺失
+_verify_binary_exists() {
+    local binary="$1"
+    local bin_dir="$2"
+    local bin_path="${bin_dir}/${binary}"
+
+    if [[ -x "$bin_path" ]]; then
+        local size_bytes
+        size_bytes=$(llama_file_size "$bin_path")
+        local bin_size
+        if [[ -n "$size_bytes" ]]; then
+            bin_size=$(llama_human_size "$size_bytes")
+        else
+            bin_size="unknown"
+        fi
+        llama_ok "二进制文件: ${binary} (${bin_size})"
+        return 0
     else
-        echo "${bytes}B"
+        llama_err "二进制文件未生成: ${binary}"
+        return 1
+    fi
+}
+
+# 检查 CUDA 动态库链接
+# 参数: $1=bin_dir, $2=binary (default: llama-cli)
+_verify_cuda_linking() {
+    local bin_dir="$1"
+    local binary="${2:-llama-cli}"
+    local bin_path="${bin_dir}/${binary}"
+
+    llama_info "CUDA 链接检查:"
+    if [[ ! -x "$bin_path" ]]; then
+        llama_warn "${binary} 不存在，跳过 CUDA 链接检查"
+        return 0
+    fi
+    if ldd "$bin_path" 2>/dev/null | grep -qE "libcudart|libcublas|libcuda"; then
+        ldd "$bin_path" | grep -E "libcudart|libcublas|libcuda" | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        llama_ok "CUDA 链接正常"
+    else
+        llama_warn "未找到 CUDA 动态库链接（可能是静态链接）"
+    fi
+}
+
+# 检查 OpenBLAS 链接
+# 参数: $1=bin_dir, $2=binary (default: llama-cli)
+_verify_openblas_linking() {
+    local bin_dir="$1"
+    local binary="${2:-llama-cli}"
+    local bin_path="${bin_dir}/${binary}"
+
+    llama_info "OpenBLAS 链接检查:"
+    if [[ ! -x "$bin_path" ]]; then
+        llama_warn "${binary} 不存在，跳过 OpenBLAS 链接检查"
+        return 0
+    fi
+    if ldd "$bin_path" 2>/dev/null | grep -qiE "openblas|blas"; then
+        ldd "$bin_path" | grep -iE "openblas|blas" | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        llama_ok "OpenBLAS 链接正常"
+    else
+        llama_warn "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
+    fi
+}
+
+# 检查 CUDA 设备 (llama-bench --help 会触发 CUDA 初始化并打印设备信息)
+# 参数: $1=bin_dir
+_verify_cuda_devices() {
+    local bin_dir="$1"
+
+    llama_info "可用设备："
+    if [[ ! -x "${bin_dir}/llama-bench" ]]; then
+        llama_warn "未找到 llama-bench，跳过设备检测"
+        return 0
+    fi
+    local bench_output
+    bench_output=$("${bin_dir}/llama-bench" --help 2>&1 || :)
+    if echo "$bench_output" | grep -q "found [0-9]* CUDA devices"; then
+        echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        llama_ok "CUDA 设备检测完成"
+    else
+        llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
+    fi
+}
+
+# 验证 OpenBLAS 运行时可用性
+# 参数: $1=bin_dir, $2=binary (default: llama-cli)
+_verify_openblas_runtime() {
+    local bin_dir="$1"
+    local binary="${2:-llama-cli}"
+    local bin_path="${bin_dir}/${binary}"
+
+    llama_info "OpenBLAS 运行时验证："
+    local openblas_lib
+    openblas_lib=$(ldd "$bin_path" 2>/dev/null | grep -oE '/[^ ]+libopenblas[^ ]*' | head -1)
+    if [[ -n "$openblas_lib" ]]; then
+        if python3 -c "import ctypes; ctypes.CDLL('$openblas_lib')" 2>/dev/null; then
+            llama_ok "OpenBLAS 可正常加载"
+        else
+            llama_warn "OpenBLAS 动态加载失败"
+        fi
+    else
+        llama_warn "未检测到 OpenBLAS 动态库路径"
     fi
 }
 
@@ -224,52 +322,12 @@ verify_build() {
 
     # 检查关键二进制文件
     for binary in llama-cli llama-server; do
-        local bin_path="${bin_dir}/${binary}"
-        if [[ -x "$bin_path" ]]; then
-            local size_bytes=
-            size_bytes=$(llama_file_size "$bin_path")
-            if [[ -n "$size_bytes" ]]; then
-                local bin_size
-                bin_size=$(_human_size "$size_bytes")
-            else
-                local bin_size="unknown"
-            fi
-            llama_ok "二进制文件: ${binary} (${bin_size})"
-        else
-            llama_err "二进制文件未生成: ${binary}"
-            ((errors++)) || :
-        fi
+        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || :
     done
 
-    # 检查 CUDA 链接
-    llama_info "CUDA 链接检查:"
-    if [[ -x "${bin_dir}/llama-cli" ]]; then
-        if ldd "${bin_dir}/llama-cli" 2>/dev/null | grep -qE "libcudart|libcublas|libcuda"; then
-            ldd "${bin_dir}/llama-cli" | grep -E "libcudart|libcublas|libcuda" | while IFS= read -r line; do
-                llama_detail "$line"
-            done
-            llama_ok "CUDA 链接正常"
-        else
-            llama_warn "未找到 CUDA 动态库链接（可能是静态链接）"
-        fi
-    else
-        llama_warn "llama-cli 不存在，跳过 CUDA 链接检查"
-    fi
-
-    # 检查 OpenBLAS 链接
-    llama_info "OpenBLAS 链接检查:"
-    if [[ -x "${bin_dir}/llama-cli" ]]; then
-        if ldd "${bin_dir}/llama-cli" 2>/dev/null | grep -qiE "openblas|blas"; then
-            ldd "${bin_dir}/llama-cli" | grep -iE "openblas|blas" | while IFS= read -r line; do
-                llama_detail "$line"
-            done
-            llama_ok "OpenBLAS 链接正常"
-        else
-            llama_warn "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
-        fi
-    else
-        llama_warn "llama-cli 不存在，跳过 OpenBLAS 链接检查"
-    fi
+    # 链接检查（非致命）
+    _verify_cuda_linking "$bin_dir" "llama-cli" || true
+    _verify_openblas_linking "$bin_dir" "llama-cli" || true
 
     # 验证二进制文件可执行性
     llama_info "验证二进制文件可执行性："
@@ -279,36 +337,9 @@ verify_build() {
         llama_warn "llama-cli 启动验证失败"
     fi
 
-    # 检查可用设备 (llama-bench --help 会触发 CUDA 初始化并打印设备信息)
-    llama_info "可用设备："
-    if [[ -x "${bin_dir}/llama-bench" ]]; then
-        local bench_output
-        bench_output=$("${bin_dir}/llama-bench" --help 2>&1 || :)
-        if echo "$bench_output" | grep -q "found [0-9]* CUDA devices"; then
-            echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
-                llama_detail "$line"
-            done
-            llama_ok "CUDA 设备检测完成"
-        else
-            llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
-        fi
-    else
-        llama_warn "未找到 llama-bench，跳过设备检测"
-    fi
-
-    # 验证 OpenBLAS 运行时可用性
-    llama_info "OpenBLAS 运行时验证："
-    local openblas_lib
-    openblas_lib=$(ldd "${bin_dir}/llama-cli" 2>/dev/null | grep -oE '/[^ ]+libopenblas[^ ]*' | head -1)
-    if [[ -n "$openblas_lib" ]]; then
-        if python3 -c "import ctypes; ctypes.CDLL('$openblas_lib')" 2>/dev/null; then
-            llama_ok "OpenBLAS 可正常加载"
-        else
-            llama_warn "OpenBLAS 动态加载失败"
-        fi
-    else
-        llama_warn "未检测到 OpenBLAS 动态库路径"
-    fi
+    # 运行时验证（非致命）
+    _verify_cuda_devices "$bin_dir" || true
+    _verify_openblas_runtime "$bin_dir" "llama-cli" || true
 
     return "$errors"
 }
@@ -324,4 +355,4 @@ fi
 git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || :
 llama_release_lock
 # shellcheck disable=SC2153
-echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BIN_DIR}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BIN_DIR}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
+echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BUILD_DIR}/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BUILD_DIR}/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
