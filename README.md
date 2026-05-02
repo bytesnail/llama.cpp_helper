@@ -31,7 +31,7 @@
 ### 配置文件
 
 #### `config.sh`
-集中定义共享路径和常量，build.sh 和 update.sh 会 source 此文件。
+集中定义共享路径和常量，build.sh、update.sh 和 run_env.sh 会 source 此文件。
 
 ```bash
 # 默认路径（可通过环境变量覆盖）
