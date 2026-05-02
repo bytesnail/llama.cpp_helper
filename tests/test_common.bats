@@ -391,3 +391,51 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ 0 ]]
 }
+
+@test "llama_run_silent preserves exit code 42 under set -e" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        llama_run_silent '(exit 42)'
+        echo \$?
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ 42 ]]
+}
+
+@test "llama_check_build_health returns 1 when binaries are missing" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/fake_llama"
+    REQUIRED_BINARIES=("llama-cli" "llama-server")
+    mkdir -p "${LLAMA_CPP_SRC}/build/bin"
+    run llama_check_build_health
+    [ "$status" -eq 1 ]
+}
+
+@test "llama_check_build_health returns 0 when binaries exist and stamp matches" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/healthy_llama"
+    REQUIRED_BINARIES=("llama-cli" "llama-server")
+    mkdir -p "${LLAMA_CPP_SRC}/build/bin"
+    touch "${LLAMA_CPP_SRC}/build/bin/llama-cli"
+    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-cli"
+    touch "${LLAMA_CPP_SRC}/build/bin/llama-server"
+    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-server"
+    git -C "${TEST_TMPDIR}/healthy_llama" init --quiet 2>/dev/null
+    git -C "${TEST_TMPDIR}/healthy_llama" add -A 2>/dev/null
+    git -C "${TEST_TMPDIR}/healthy_llama" commit -m "init" --quiet 2>/dev/null
+    local head
+    head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
+    mkdir -p "${LLAMA_CPP_SRC}/build"
+    echo "$head" > "${LLAMA_CPP_SRC}/build/.build-stamp"
+    run llama_check_build_health
+    [ "$status" -eq 0 ]
+}
+
+@test "llama_human_size: 2048 bytes returns 2KiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 2048
+    [ "$status" -eq 0 ]
+    [ "$output" = "2KiB" ]
+}

@@ -4,7 +4,7 @@ BATS        := $(shell command -v bats 2>/dev/null || echo bats)
 
 SHELL_SCRIPTS := common.sh config.sh build.sh update.sh run_env.sh
 
-.PHONY: lint check test syntax all clean help
+.PHONY: lint check test syntax all help
 
 help:
 	@echo "Targets: lint, syntax, test, check, all"
@@ -13,7 +13,7 @@ lint:
 	$(SHELLCHECK) $(SHELL_SCRIPTS)
 
 syntax:
-	@for f in $(SHELL_SCRIPTS); do bash -n "$$f" && echo "OK: $$f" || echo "FAIL: $$f"; done
+	@for f in $(SHELL_SCRIPTS); do bash -n "$$f" && echo "OK: $$f" || { echo "FAIL: $$f"; exit 1; }; done
 
 test:
 	$(BATS) tests/

@@ -46,7 +46,6 @@ llama_err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 llama_step()  { echo -e "\n${BOLD}=== $* ===${NC}"; }
 llama_detail() { echo -e "${BLUE}  →${NC} $*"; }
 
-
 # --- 前置条件检查 --------------------------------------------
 # Usage: llama_check_commands <cmd1> [pkg1] <cmd2> [pkg2] ...
 llama_check_commands() {
@@ -284,50 +283,10 @@ llama_with_network_context() {
     fi
 }
 
-# --- Git / 子模块辅助 ----------------------------------------
+# --- Git 辅助 ------------------------------------------------
 # Usage: llama_is_full_commit_sha <string>
 # Returns 0 if the argument is a full 40-char hex commit SHA, 1 otherwise.
 llama_is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
-
-# Usage: llama_cleanup_stale_submodules
-# Cleans up stale git submodule directories left behind after checkout.
-# git checkout does not auto-remove submodule working dirs from old versions.
-# Scans for .git gitlink files, compares with current index submodule paths, removes orphans.
-llama_cleanup_stale_submodules() {
-    local -A expected_paths
-    while IFS= read -r path; do
-        expected_paths["$path"]=1
-    done < <(git -C "$LLAMA_CPP_SRC" ls-files --stage | grep '^160000' | awk '{print $NF}')
-
-    local stale_count=0
-    local gitlink mod_dir
-    while IFS= read -r gitlink; do
-        # 使用 bash 参数扩展安全地剥离前缀，避免 sed 正则注入
-        gitlink="${gitlink#"${LLAMA_CPP_SRC}"/}"
-        mod_dir="$(dirname "$gitlink")"
-        # 跳过当前版本仍在追踪的 submodule
-        if [[ -v expected_paths[$mod_dir] ]]; then
-            continue
-        fi
-        # 确认是 submodule 的 gitlink 文件（内容为 gitdir:...）
-        if grep -q '^gitdir:' "${LLAMA_CPP_SRC}/${gitlink}" 2>/dev/null; then
-            llama_info "清理旧子模块残留: ${mod_dir}"
-            # shellcheck disable=SC2115
-            rm -rf "${LLAMA_CPP_SRC}/${gitlink}" "${LLAMA_CPP_SRC}/${mod_dir}"
-            # 清理 .git/modules/ 中对应的条目
-            local git_modules_dir="${LLAMA_CPP_SRC}/.git/modules/${mod_dir}"
-            if [[ -d "$git_modules_dir" ]]; then
-                rm -rf "$git_modules_dir"
-                llama_detail "清理 .git/modules: ${mod_dir}"
-            fi
-            ((stale_count++)) || :
-        fi
-    done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
-
-    if [[ "$stale_count" -gt 0 ]]; then
-        llama_ok "旧子模块清理完成 (${stale_count} 个)"
-    fi
-}
 
 # Usage: llama_check_build_health
 # Checks if the current build is complete and matches the current source commit.
@@ -404,7 +363,6 @@ llama_cd_back() {
 }
 
 # Usage: llama_die [message] [exit_code]
-# Usage: llama_die [message] [exit_code]
 llama_die() {
     local msg="${1:-}"
     local code="${2:-1}"
@@ -469,6 +427,25 @@ llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
 }
 
+llama_save_colors() {
+    local _cvar
+    for _cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+        printf -v "_LLAMA_SAVED_${_cvar}" '%s' "${!_cvar-}"
+    done
+}
+
+llama_restore_colors() {
+    local _cvar _saved_var
+    for _cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+        _saved_var="_LLAMA_SAVED_${_cvar}"
+        if [[ -n "${!_saved_var+isset}" ]]; then
+            printf -v "$_cvar" '%s' "${!_saved_var}"
+        else
+            unset "$_cvar" 2>/dev/null || :
+        fi
+        unset "$_saved_var"
+    done
+}
 # --- 运行示例输出 ----------------------------------------------
 # Usage: llama_print_run_examples <bin_dir>
 llama_print_run_examples() {
@@ -481,11 +458,8 @@ llama_print_run_examples() {
 
 # Usage: llama_run_silent <command> [args...]
 llama_run_silent() {
-    local _prev_opts
-    _prev_opts=$(set +o | grep errexit || true)
     set +e
     "$@"
     local ret=$?
-    eval "$_prev_opts"
     return "$ret"
 }

@@ -14,6 +14,8 @@ source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
 
+BUILD_DIR="${LLAMA_CPP_SRC}/build"
+
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || llama_die "无法获取文件锁"
 
@@ -41,6 +43,27 @@ _show_help() {
         "  bash build.sh              # 完整重新构建
   bash build.sh -i           # 增量构建
   bash build.sh --help       # 显示帮助"
+}
+
+_detect_cuda_lib_dir() {
+    if ! command -v nvcc &>/dev/null; then
+        return 1
+    fi
+    local nvcc_dir
+    nvcc_dir=$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")
+    local cuda_lib_dir="${nvcc_dir}/targets/x86_64-linux/lib"
+    if [[ ! -d "$cuda_lib_dir" ]]; then
+        local cuda_rt
+        cuda_rt=$(find "$nvcc_dir" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
+        if [[ -n "$cuda_rt" ]]; then
+            cuda_lib_dir=$(dirname "$(readlink -f "$cuda_rt")")
+        fi
+    fi
+    if [[ -n "$cuda_lib_dir" && -d "$cuda_lib_dir" ]]; then
+        echo "$cuda_lib_dir"
+        return 0
+    fi
+    return 1
 }
 
 # --- 验证辅助函数 --------------------------------------------
@@ -179,10 +202,11 @@ _verify_build() {
 }
 
 # --- 参数解析 ------------------------------------------------
-INCREMENTAL=0
 
 # --- 主逻辑 --------------------------------------------------
 main() {
+    local INCREMENTAL=0
+    local JOBS
     while (($# > 0)); do
         case "$1" in
             -i|--incremental)
@@ -234,7 +258,6 @@ main() {
     llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die "磁盘空间不足"
 
     # --- 动态检测 ------------------------------------------------
-    BUILD_DIR="${LLAMA_CPP_SRC}/build"
     JOBS=$(llama_get_cpu_count)
     llama_detail "并行编译任务数: $JOBS"
 
@@ -255,25 +278,12 @@ main() {
     #    验证方法：更新 llama.cpp 后，删除此处 CUDA_LIB_DIR 检测和 CMAKE_BUILD_RPATH，
     #    执行完整构建（bash build.sh），若链接阶段无 "libcudart.so.* not found" 错误，
     #    即说明 llama.cpp 已自行解决此问题，可安全移除。
-    if command -v nvcc &>/dev/null; then
-        _NVCC_DIR=$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")
-        # 优先使用标准 CUDA 目录结构推断
-        CUDA_LIB_DIR="$_NVCC_DIR/targets/x86_64-linux/lib"
-        if [[ ! -d "$CUDA_LIB_DIR" ]]; then
-            # 回退：从 libcudart.so 位置反推
-            _CUDA_RT=$(find "$_NVCC_DIR" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
-            if [[ -n "$_CUDA_RT" ]]; then
-                CUDA_LIB_DIR=$(dirname "$(readlink -f "$_CUDA_RT")")
-            fi
-        fi
-        if [[ -n "$CUDA_LIB_DIR" && -d "$CUDA_LIB_DIR" ]]; then
-            llama_detail "CUDA 库路径: $CUDA_LIB_DIR"
-        else
-            llama_warn "无法自动检测 CUDA 库路径，构建可能失败"
-            CUDA_LIB_DIR=""
-        fi
-        unset _NVCC_DIR _CUDA_RT _LLAMA_OPENBLAS_LIB
+    if CUDA_LIB_DIR=$(_detect_cuda_lib_dir); then
+        llama_detail "CUDA 库路径: $CUDA_LIB_DIR"
     else
+        if command -v nvcc &>/dev/null; then
+            llama_warn "无法自动检测 CUDA 库路径，构建可能失败"
+        fi
         CUDA_LIB_DIR=""
     fi
 
@@ -316,10 +326,10 @@ main() {
         -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
         -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
         "${CMAKE_EXTRA_ARGS[@]}"
-    CMAKE_EXIT=$?
+    local cmake_exit=$?
 
-    if [[ "$CMAKE_EXIT" -ne 0 ]]; then
-        llama_die "CMake 配置失败 (退出码: $CMAKE_EXIT)"
+    if [[ "$cmake_exit" -ne 0 ]]; then
+        llama_die "CMake 配置失败 (退出码: $cmake_exit)"
     fi
 
     llama_ok "CMake 配置完成"
@@ -328,10 +338,10 @@ main() {
     llama_step "步骤 3/4：编译（${JOBS} 核并行）"
 
     llama_run_silent cmake --build "$BUILD_DIR" --config Release -j "$JOBS"
-    BUILD_EXIT=$?
+    local build_exit=$?
 
-    if [[ "$BUILD_EXIT" -ne 0 ]]; then
-        llama_die "编译失败 (退出码: $BUILD_EXIT)"
+    if [[ "$build_exit" -ne 0 ]]; then
+        llama_die "编译失败 (退出码: $build_exit)"
     fi
 
     llama_ok "编译完成"
@@ -341,12 +351,14 @@ main() {
     llama_step "步骤 4/4：验证构建"
 
     _verify_build
-    VERIFY_EXIT=$?
-    if [[ "$VERIFY_EXIT" -gt 0 ]]; then
-        llama_die "构建验证失败，${VERIFY_EXIT} 个错误"
+    local verify_exit=$?
+    if [[ "$verify_exit" -gt 0 ]]; then
+        llama_die "构建验证失败，${verify_exit} 个错误"
     fi
     git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || :
-    echo -e "\n${GREEN}✅ 构建完成！${NC}\n"
+    echo ""
+    llama_ok "构建完成！"
+    echo ""
     llama_print_run_examples "${BUILD_DIR}/bin"
     return 0
 }

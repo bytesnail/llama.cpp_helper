@@ -14,5 +14,3 @@ source-path=.
 # SC2317: return N 2>/dev/null || exit N is intentional idiomatic bash
 disable=SC2034,SC2119,SC2312,SC2317
 
-# SC2312: pipefail grep patterns are intentional
-# SC2317: return N 2>/dev/null || exit N is intentional idiomatic bash

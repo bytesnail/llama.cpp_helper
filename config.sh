@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 # config.sh — 集中定义共享路径和常量
-# 作用：集中定义共享路径和常量
 # 用法：source /mnt/hdd/projects/llama.cpp_helper/config.sh
 # ============================================================
 
@@ -45,8 +44,4 @@ GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
 # 关键二进制文件（构建验证和健康检查使用）
 REQUIRED_BINARIES=("llama-cli" "llama-server")
 # 版本号
-
-# 网络超时（update.sh 使用）
-CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
-CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 LLAMA_HELPER_VERSION="1.0.0"

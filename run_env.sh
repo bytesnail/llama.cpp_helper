@@ -24,7 +24,6 @@ for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
 done
 unset _v
 
-
 # 引导：查找并 source common.sh（共享辅助函数尚不可用）
 _BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" > /dev/null && pwd)"
 if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
@@ -70,7 +69,7 @@ _show_help() {
 _show_env_vars() {
     local var
     # 使用排序确保输出顺序确定性
-    for var in $(echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort); do
+    for var in $(_sorted_env_var_names); do
         local info="${LLAMA_ENV_VARS[$var]}"
         local desc="${info#*|}"
         echo "  ${var}"
@@ -84,13 +83,18 @@ _show_env_vars() {
     done
 }
 
+_sorted_env_var_names() {
+    echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort
+}
+
 # --- 主函数 --------------------------------------------------
 main() {
     local SHOW_STATUS=0
-    if (($# > 0)); then
+    while (($# > 0)); do
         case "$1" in
             -s|--status)
                 SHOW_STATUS=1
+                shift
                 ;;
             -h|--help)
                 _show_help
@@ -106,7 +110,7 @@ main() {
                 return 1
                 ;;
         esac
-    fi
+    done
 
     # --- 状态模式 ------------------------------------------------
     if [[ "$SHOW_STATUS" -eq 1 ]]; then
@@ -140,7 +144,7 @@ main() {
 
     # 设置每个环境变量
     local var info value desc
-    for var in $(echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort); do
+    for var in $(_sorted_env_var_names); do
         info="${LLAMA_ENV_VARS[$var]}"
         value="${info%|*}"
         desc="${info#*|}"
@@ -177,16 +181,6 @@ EOF
 main "$@"
 _main_rc=$?
 
-# 清理 common.sh 留下的颜色变量，防止污染父 shell
-for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-    _saved_var="_LLAMA_SAVED_${_v}"
-    if [[ -n "${!_saved_var+isset}" ]]; then
-        printf -v "$_v" '%s' "${!_saved_var}"
-    else
-        unset "$_v" 2>/dev/null || :
-    fi
-    unset "_LLAMA_SAVED_${_v}"
-done
-unset _v _saved_var
+llama_restore_colors
 
 llama_return_or_exit ${_main_rc:-0}
