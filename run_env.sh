@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# llama.cpp 运行时性能优化环境变量
+# run_env.sh — 运行时性能优化环境变量
 # 硬件：2× RTX 2080 Ti (NVLink) - 离散 GPU，不建议启用统一内存
 # 使用：source /mnt/hdd/projects/llama.cpp_helper/run_env.sh
 # ============================================================
@@ -129,10 +129,8 @@ main() {
     llama_step "设置 llama.cpp 运行环境"
 
     # 检测 GPU
-    local GPU_COUNT=0
-    if command -v nvidia-smi &>/dev/null; then
-        GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
-    fi
+    local GPU_COUNT
+    GPU_COUNT=$(llama_get_gpu_count)
 
     if [[ "$GPU_COUNT" -lt 2 ]]; then
         llama_warn "检测到 ${GPU_COUNT} 块 GPU，P2P 优化效果有限"

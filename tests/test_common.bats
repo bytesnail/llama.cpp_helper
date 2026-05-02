@@ -254,6 +254,132 @@ teardown() {
     [[ "$output" =~ 1 ]]
 }
 
+# --- Human-Readable Size ---
+@test "llama_human_size: 0 bytes returns 0B" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 0
+    [ "$status" -eq 0 ]
+    [ "$output" = "0B" ]
+}
+
+@test "llama_human_size: 512 bytes returns 512B" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 512
+    [ "$status" -eq 0 ]
+    [ "$output" = "512B" ]
+}
+
+@test "llama_human_size: 1023 bytes returns 1023B" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 1023
+    [ "$status" -eq 0 ]
+    [ "$output" = "1023B" ]
+}
+
+@test "llama_human_size: 1024 bytes returns 1KiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 1024
+    [ "$status" -eq 0 ]
+    [ "$output" = "1KiB" ]
+}
+
+@test "llama_human_size: 1536 bytes returns 1KiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 1536
+    [ "$status" -eq 0 ]
+    [ "$output" = "1KiB" ]
+}
+
+@test "llama_human_size: 1048576 bytes returns 1MiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 1048576
+    [ "$status" -eq 0 ]
+    [ "$output" = "1MiB" ]
+}
+
+@test "llama_human_size: 1073741824 bytes returns 1.0GiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 1073741824
+    [ "$status" -eq 0 ]
+    [ "$output" = "1.0GiB" ]
+}
+
+@test "llama_human_size: 1610612736 bytes returns 1.5GiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 1610612736
+    [ "$status" -eq 0 ]
+    [ "$output" = "1.5GiB" ]
+}
+
+@test "llama_human_size: 2147483648 bytes returns 2.0GiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 2147483648
+    [ "$status" -eq 0 ]
+    [ "$output" = "2.0GiB" ]
+}
+
+# --- Commit SHA Validation ---
+@test "llama_is_full_commit_sha: valid 40-char lowercase hex returns 0" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_is_full_commit_sha "abcdef1234567890abcdef1234567890abcdef12"
+    [ "$status" -eq 0 ]
+}
+
+@test "llama_is_full_commit_sha: valid 40-char mixed case hex returns 0" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_is_full_commit_sha "ABCDEF1234567890ABCDEF1234567890ABCDEF12"
+    [ "$status" -eq 0 ]
+}
+
+@test "llama_is_full_commit_sha: short sha (< 40 chars) returns 1" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_is_full_commit_sha "abc123"
+    [ "$status" -eq 1 ]
+}
+
+@test "llama_is_full_commit_sha: invalid characters returns 1" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_is_full_commit_sha "ghijklmnopqrstuvwxyzGHIJKLMNOPQRSTUVWXYZ1234"
+    [ "$status" -eq 1 ]
+}
+
+@test "llama_is_full_commit_sha: empty string returns 1" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_is_full_commit_sha ""
+    [ "$status" -eq 1 ]
+}
+
+# --- Return or Exit ---
+@test "llama_return_or_exit: returns given exit code in sourced context" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run bash -c "source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null; llama_return_or_exit 42; echo \$?"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ 42 ]]
+}
+
+@test "llama_return_or_exit: returns 0 when called with 0" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run bash -c "source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null; llama_return_or_exit 0; echo \$?"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ 0 ]]
+}
+
+# --- Empty llama_die ---
+@test "llama_die with empty message exits 1 and outputs only [ERROR] prefix" {
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_die '' 2>&1
+    "
+    [ "$status" -eq 1 ]
+}
+
+# --- Build Health ---
+@test "llama_check_build_health returns 1 when build dir does not exist" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/nonexistent_llama"
+    run llama_check_build_health
+    [ "$status" -eq 1 ]
+}
 @test "llama_run_silent passes through success" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run bash -c "

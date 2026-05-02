@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# llama.cpp helper - Common Library
+# common.sh — 共享工具函数库
 # Shared utilities for all helper scripts
 # Requires: Bash >= 4.2 (declare -A associative arrays, [[ -v ]] variable test)
 # ============================================================
@@ -44,7 +44,8 @@ llama_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 llama_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 llama_err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 llama_step()  { echo -e "\n${BOLD}=== $* ===${NC}"; }
-llama_detail(){ echo -e "${BLUE}  →${NC} $*"; }
+llama_detail() { echo -e "${BLUE}  →${NC} $*"; }
+
 
 # --- 前置条件检查 --------------------------------------------
 # Usage: llama_check_commands <cmd1> [pkg1] <cmd2> [pkg2] ...
@@ -107,18 +108,30 @@ llama_get_cpu_count() {
 }
 
 # --- GPU 检测 ------------------------------------------------
+# Usage: llama_get_gpu_count
+# Returns the number of NVIDIA GPUs detected via nvidia-smi.
+# Output: GPU count on stdout (0 if none), exit code 0 if detected, 1 otherwise.
+llama_get_gpu_count() {
+    if command -v nvidia-smi &>/dev/null; then
+        local count
+        count=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
+        echo "$count"
+        return 0
+    fi
+    echo "0"
+    return 1
+}
+
 # Usage: llama_check_gpu
 llama_check_gpu() {
-    if command -v nvidia-smi &>/dev/null; then
-        local gpu_count
-        gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
-        if [[ "$gpu_count" -gt 0 ]]; then
-            local line
-            nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | while IFS= read -r line; do
-                llama_detail "$line"
-            done
-            return 0
-        fi
+    local gpu_count
+    gpu_count=$(llama_get_gpu_count)
+    if [[ "$gpu_count" -gt 0 ]]; then
+        local line
+        nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | while IFS= read -r line; do
+            llama_detail "$line"
+        done
+        return 0
     fi
     llama_warn "未检测到 NVIDIA GPU"
     return 1
@@ -325,7 +338,7 @@ llama_check_build_health() {
         return 1
     fi
     # 检查关键二进制文件是否存在且可执行
-    for binary in llama-cli llama-server; do
+    for binary in "${REQUIRED_BINARIES[@]}"; do
         if [[ ! -x "${bin_dir}/${binary}" ]]; then
             return 1
         fi
@@ -362,24 +375,35 @@ llama_file_size() {
 }
 
 # --- 可读文件大小 --------------------------------------------
+# Byte constants for llama_human_size
+readonly _LLAMA_BYTES_KIB=1024
+readonly _LLAMA_BYTES_MIB=1048576
+readonly _LLAMA_BYTES_GIB=1073741824
 # Usage: llama_human_size <bytes>
 # Converts byte count to human-readable format (KiB/MiB/GiB)
 llama_human_size() {
     local bytes=$1
-    if ((bytes >= 1073741824)); then
-        local gb=$((bytes / 1073741824))
-        local frac=$(( (bytes % 1073741824) * 10 / 1073741824 ))
+    if ((bytes >= _LLAMA_BYTES_GIB)); then
+        local gb=$((bytes / _LLAMA_BYTES_GIB))
+        local frac=$(( (bytes % _LLAMA_BYTES_GIB) * 10 / _LLAMA_BYTES_GIB ))
         echo "${gb}.${frac}GiB"
-    elif ((bytes >= 1048576)); then
-        echo "$((bytes / 1048576))MiB"
-    elif ((bytes >= 1024)); then
-        echo "$((bytes / 1024))KiB"
+    elif ((bytes >= _LLAMA_BYTES_MIB)); then
+        echo "$((bytes / _LLAMA_BYTES_MIB))MiB"
+    elif ((bytes >= _LLAMA_BYTES_KIB)); then
+        echo "$((bytes / _LLAMA_BYTES_KIB))KiB"
     else
         echo "${bytes}B"
     fi
 }
 
 # --- 退出辅助 ------------------------------------------------
+# Usage: llama_cd_back
+# Returns to ORIG_DIR safely. Designed for update.sh error paths.
+llama_cd_back() {
+    cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+}
+
+# Usage: llama_die [message] [exit_code]
 # Usage: llama_die [message] [exit_code]
 llama_die() {
     local msg="${1:-}"

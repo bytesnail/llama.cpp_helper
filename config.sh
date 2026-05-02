@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# llama.cpp helper - 配置文件
+# config.sh — 集中定义共享路径和常量
 # 作用：集中定义共享路径和常量
 # 用法：source /mnt/hdd/projects/llama.cpp_helper/config.sh
 # ============================================================
@@ -9,7 +9,7 @@
 # 仅在确实必要时使用英文。修改或添加消息时请遵循此约定。
 # 防止直接执行
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "[ERROR] 本文件应当被 source，而非直接执行" >&2
+    echo "[WARN] 本文件应当被 source，而非直接执行" >&2
     echo "用法: source ${BASH_SOURCE[0]}" >&2
     exit 1
 fi
@@ -42,5 +42,11 @@ GGML_NATIVE="${GGML_NATIVE:-ON}"
 GGML_BLAS="${GGML_BLAS:-ON}"
 GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
 
+# 关键二进制文件（构建验证和健康检查使用）
+REQUIRED_BINARIES=("llama-cli" "llama-server")
 # 版本号
+
+# 网络超时（update.sh 使用）
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 LLAMA_HELPER_VERSION="1.0.0"
