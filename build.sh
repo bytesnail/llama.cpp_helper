@@ -17,8 +17,7 @@ llama_source_deps
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || llama_die "无法获取文件锁"
 
-# 确保所有退出路径都释放文件锁（包括正常退出和 set -e 触发的异常退出）
-trap 'llama_release_lock' EXIT
+
 
 # --- 退出清理 ------------------------------------------------
 cleanup_on_exit() {
@@ -29,10 +28,10 @@ cleanup_on_exit() {
     fi
     llama_safe_exit "$exit_code"
 }
-llama_setup_trap cleanup_on_exit
+llama_setup_trap _cleanup_on_exit
 
 # --- 帮助信息 ------------------------------------------------
-show_help() {
+_show_help() {
     llama_show_help \
         "$(basename "$0")" \
         "使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS 和 CUDA 支持。" \
@@ -53,14 +52,12 @@ while (($# > 0)); do
             shift
             ;;
         -h|--help)
-            show_help
-            llama_release_lock
-            exit 0
+            _show_help
+            llama_safe_exit 0
             ;;
         --version)
             llama_show_version
-            llama_release_lock
-            exit 0
+            llama_safe_exit 0
             ;;
         *)
             llama_die "未知选项: $1"
@@ -141,65 +138,6 @@ if command -v nvcc &>/dev/null; then
 else
     CUDA_LIB_DIR=""
 fi
-
-# --- 步骤 1：清理旧构建 --------------------------------------
-if [[ "$INCREMENTAL" -eq 0 ]]; then
-    llama_step "步骤 1/4：清理旧构建"
-    if [[ -d "$BUILD_DIR" ]]; then
-        llama_info "移除旧 build 目录..."
-        rm -rf "$BUILD_DIR"
-    fi
-    llama_ok "清理完成"
-else
-    llama_step "步骤 1/4：增量构建（跳过清理）"
-fi
-
-# --- 步骤 2：CMake 配置 ---------------------------------------
-llama_step "步骤 2/4：CMake 配置"
-
-llama_info "运行 CMake 配置..."
-
-# 条件性添加 CUDA 库 RPATH（仅当 CUDA_LIB_DIR 非空时）
-if [[ -n "$CUDA_LIB_DIR" ]]; then
-    CMAKE_EXTRA_ARGS=("-DCMAKE_BUILD_RPATH=$CUDA_LIB_DIR")
-else
-    CMAKE_EXTRA_ARGS=()
-fi
-
-llama_run_silent cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
-    -DCMAKE_C_COMPILER="$GCC_PATH" \
-    -DCMAKE_CXX_COMPILER="$GXX_PATH" \
-    -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
-    -DLLAMA_BUILD_TESTS=OFF \
-    -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DGGML_NATIVE="${GGML_NATIVE}" \
-    -DGGML_BLAS="${GGML_BLAS}" \
-    -DGGML_BLAS_VENDOR="${GGML_BLAS_VENDOR}" \
-    -DGGML_CUDA=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}" \
-    -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
-    -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
-    -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
-    "${CMAKE_EXTRA_ARGS[@]}"
-CMAKE_EXIT=$?
-
-if [[ "$CMAKE_EXIT" -ne 0 ]]; then
-    llama_die "CMake 配置失败 (退出码: $CMAKE_EXIT)"
-fi
-
-llama_ok "CMake 配置完成"
-
-# --- 步骤 3：编译 --------------------------------------------
-llama_step "步骤 3/4：编译（${JOBS} 核并行）"
-
-llama_run_silent cmake --build "$BUILD_DIR" --config Release -j "$JOBS"
-BUILD_EXIT=$?
-
-if [[ "$BUILD_EXIT" -ne 0 ]]; then
-    llama_die "编译失败 (退出码: $BUILD_EXIT)"
-fi
-
-llama_ok "编译完成"
 
 # --- 验证辅助函数 --------------------------------------------
 
@@ -314,9 +252,67 @@ _verify_openblas_runtime() {
         llama_warn "未检测到 OpenBLAS 动态库路径"
     fi
 }
+# --- 步骤 1：清理旧构建 --------------------------------------
+if [[ "$INCREMENTAL" -eq 0 ]]; then
+    llama_step "步骤 1/4：清理旧构建"
+    if [[ -d "$BUILD_DIR" ]]; then
+        llama_info "移除旧 build 目录..."
+        rm -rf "$BUILD_DIR"
+    fi
+    llama_ok "清理完成"
+else
+    llama_step "步骤 1/4：增量构建（跳过清理）"
+fi
+
+# --- 步骤 2：CMake 配置 ---------------------------------------
+llama_step "步骤 2/4：CMake 配置"
+
+llama_info "运行 CMake 配置..."
+
+# 条件性添加 CUDA 库 RPATH（仅当 CUDA_LIB_DIR 非空时）
+if [[ -n "$CUDA_LIB_DIR" ]]; then
+    CMAKE_EXTRA_ARGS=("-DCMAKE_BUILD_RPATH=$CUDA_LIB_DIR")
+else
+    CMAKE_EXTRA_ARGS=()
+fi
+
+llama_run_silent cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
+    -DCMAKE_C_COMPILER="$GCC_PATH" \
+    -DCMAKE_CXX_COMPILER="$GXX_PATH" \
+    -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
+    -DLLAMA_BUILD_TESTS=OFF \
+    -DLLAMA_BUILD_EXAMPLES=OFF \
+    -DGGML_NATIVE="${GGML_NATIVE}" \
+    -DGGML_BLAS="${GGML_BLAS}" \
+    -DGGML_BLAS_VENDOR="${GGML_BLAS_VENDOR}" \
+    -DGGML_CUDA=ON \
+    -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}" \
+    -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
+    -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
+    -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
+    "${CMAKE_EXTRA_ARGS[@]}"
+CMAKE_EXIT=$?
+
+if [[ "$CMAKE_EXIT" -ne 0 ]]; then
+    llama_die "CMake 配置失败 (退出码: $CMAKE_EXIT)"
+fi
+
+llama_ok "CMake 配置完成"
+
+# --- 步骤 3：编译 --------------------------------------------
+llama_step "步骤 3/4：编译（${JOBS} 核并行）"
+
+llama_run_silent cmake --build "$BUILD_DIR" --config Release -j "$JOBS"
+BUILD_EXIT=$?
+
+if [[ "$BUILD_EXIT" -ne 0 ]]; then
+    llama_die "编译失败 (退出码: $BUILD_EXIT)"
+fi
+
+llama_ok "编译完成"
 
 # --- 验证构建 ------------------------------------------------
-verify_build() {
+_verify_build() {
     local errors=0
     local bin_dir="${BUILD_DIR}/bin"
 
@@ -347,12 +343,13 @@ verify_build() {
 # --- 步骤 4：验证构建 ----------------------------------------
 llama_step "步骤 4/4：验证构建"
 
-verify_build
+_verify_build
 VERIFY_EXIT=$?
 if [[ "$VERIFY_EXIT" -gt 0 ]]; then
     llama_die "构建验证失败，${VERIFY_EXIT} 个错误"
 fi
 git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || :
-llama_release_lock
+llama_safe_exit 0
 # shellcheck disable=SC2153
-echo -e "\n${GREEN}✅ 构建完成！${NC}\n\n运行示例:\n  source ${SCRIPT_DIR}/run_env.sh\n  ${BUILD_DIR}/bin/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\"\n  ${BUILD_DIR}/bin/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
+echo -e "\n${GREEN}✅ 构建完成！${NC}\n"
+llama_print_run_examples "${BUILD_DIR}/bin"

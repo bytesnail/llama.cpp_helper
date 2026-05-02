@@ -18,7 +18,15 @@ fi
 # 因为 source 时退出会影响当前 shell
 
 # 加载 common.sh
-# Save existing color variables to restore after execution
+#HM|# 保存颜色变量，以便在退出前恢复
+#KQ|#
+#QG|# run_env.sh 设计为被 source 执行，必须避免污染父 shell
+#WQ|# 因此需要在 source common.sh 之前保存父 shell 的颜色变量状态
+#YT|# 在脚本结束前恢复这些变量，确保父 shell 的环境不受影响
+#RZ|#
+#M5|# 注意：保存的变量可能为空值或未定义，恢复时会正确地 unset 它们
+#HM|# Save existing color variables to restore after execution
+#VX|# (run_env.sh is designed to be sourced; we must not pollute parent shell)
 # (run_env.sh is designed to be sourced; we must not pollute parent shell)
 for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${_v}" '%s' "${!_v-}"
@@ -55,7 +63,7 @@ declare -A LLAMA_ENV_VARS=(
 )
 
 # --- 帮助信息 ------------------------------------------------
-show_help() {
+_show_help() {
     llama_show_help \
         "source $(basename "${BASH_SOURCE[0]}")" \
         "设置 llama.cpp 运行时环境变量，优化双 GPU NVLink 性能。" \
@@ -65,10 +73,10 @@ show_help() {
         "  source run_env.sh              # 加载环境变量
   source run_env.sh --status     # 查看当前状态
   source run_env.sh --help       # 显示帮助"
-    show_env_vars
+    _show_env_vars
 }
 
-show_env_vars() {
+_show_env_vars() {
     local var
     # 使用排序确保输出顺序确定性
     for var in $(echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort); do
@@ -94,7 +102,7 @@ main() {
                 SHOW_STATUS=1
                 ;;
             -h|--help)
-                show_help
+                _show_help
                 return 0
                 ;;
             --version)
@@ -103,7 +111,7 @@ main() {
                 ;;
             *)
                 llama_err "未知选项: $1"
-                show_help
+                _show_help
                 return 1
                 ;;
         esac
@@ -112,7 +120,7 @@ main() {
     # --- 状态模式 ------------------------------------------------
     if [[ "$SHOW_STATUS" -eq 1 ]]; then
         llama_step "当前 llama.cpp 环境变量状态"
-        show_env_vars
+        _show_env_vars
 
         llama_info "GPU 信息:"
         if command -v nvidia-smi &>/dev/null; then

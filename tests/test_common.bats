@@ -4,19 +4,14 @@
 load test_helper
 
 setup() {
-    # test_helper.bash defines setup() too but bats uses the last definition,
-    # so we must replicate its tmpdir/lock setup here
-    export TEST_TMPDIR
-    TEST_TMPDIR=$(mktemp -d)
-    export LOCK_FILE="${TEST_TMPDIR}/test.lock"
-
-    # Source common.sh — line 4 has an uncommented line that errors,
-    # suppress stderr and ignore the non-zero return (all functions still load)
+    _setup_tmpdir
+    # Source common.sh — suppress stderr because common.sh's
+    # anti-direct-execution guard prints to stderr in the bats subshell
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
 }
 
 teardown() {
-    rm -rf "${TEST_TMPDIR:-}"
+    _teardown_tmpdir
 }
 
 # --- Logging ---

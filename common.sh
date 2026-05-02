@@ -5,6 +5,14 @@
 # Requires: Bash >= 4.2 (declare -A associative arrays, [[ -v ]] variable test)
 # ============================================================
 
+# --- Guard against redundant re-sourcing ---------------------
+_LLAMA_COMMON_SOURCED=${_LLAMA_COMMON_SOURCED:-0}
+if [[ "$_LLAMA_COMMON_SOURCED" -eq 1 ]]; then
+    return 0 2>/dev/null || true
+fi
+_LLAMA_COMMON_SOURCED=1
+# 语言策略：本项目的用户消息（日志、错误、帮助文本）以中文为主要语言。
+# 仅在确实必要时使用英文。修改或添加消息时请遵循此约定。
 # --- Safety --------------------------------------------------
 # Only enable strict mode when executed directly (not when sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -344,6 +352,9 @@ llama_source_deps() {
     source "${SCRIPT_DIR}/config.sh"
 }
 
+# Note: Help text labels (用法/描述/选项/示例) are intentionally in Chinese
+# for this project's target audience. See config.sh for language policy.
+
 llama_show_help() {
     local script_name="$1"
     local description="$2"
@@ -369,6 +380,16 @@ EOF
 
 llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
+}
+
+# --- 运行示例输出 ----------------------------------------------
+# Usage: llama_print_run_examples <bin_dir>
+llama_print_run_examples() {
+    local bin_dir="${1:?bin_dir required}"
+    echo "运行示例:"
+    echo "  source ${SCRIPT_DIR}/run_env.sh"
+    echo "  ${bin_dir}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
+    echo "  ${bin_dir}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
 }
 
 # Usage: llama_run_silent <command> [args...]
