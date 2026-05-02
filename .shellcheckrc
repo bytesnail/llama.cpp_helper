@@ -8,8 +8,11 @@ external-sources=true
 source-path=.
 
 # Warnings to exclude
-# SC2312: "Consider invoking this command separately" (pipefail grep patterns are intentional)
-disable=SC2034,SC2312,SC2317
+# SC2034: unused variables in sourced scripts (config.sh defines vars for other scripts)
+# SC2119: llama_acquire_lock uses default LOCK_FILE, doesn't need "$@"
+# SC2312: pipefail grep patterns are intentional
+# SC2317: return N 2>/dev/null || exit N is intentional idiomatic bash
+disable=SC2034,SC2119,SC2312,SC2317
 
 # SC2034: unused variables in sourced scripts
 # SC2312: pipefail grep patterns are intentional

@@ -10,9 +10,9 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/common.sh"
-llama_source_deps
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/config.sh"
 
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || llama_die "无法获取文件锁"
@@ -20,7 +20,7 @@ llama_acquire_lock || llama_die "无法获取文件锁"
 
 
 # --- 退出清理 ------------------------------------------------
-cleanup_on_exit() {
+_cleanup_on_exit() {
     local exit_code=$?
     if [[ "${INCREMENTAL:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
         llama_warn "清理未完成的构建目录..."
@@ -42,102 +42,6 @@ _show_help() {
   bash build.sh -i           # 增量构建
   bash build.sh --help       # 显示帮助"
 }
-
-# --- 参数解析 ------------------------------------------------
-INCREMENTAL=0
-while (($# > 0)); do
-    case "$1" in
-        -i|--incremental)
-            INCREMENTAL=1
-            shift
-            ;;
-        -h|--help)
-            _show_help
-            llama_safe_exit 0
-            ;;
-        --version)
-            llama_show_version
-            llama_safe_exit 0
-            ;;
-        *)
-            llama_die "未知选项: $1"
-            ;;
-    esac
-done
-
-# --- 前置检查 ------------------------------------------------
-llama_step "前置检查"
-
-# shellcheck disable=SC2015
-    llama_check_commands \
-    cmake "cmake" \
-    gcc "gcc" \
-    g++ "g++" \
-    python3 "python3" \
-    && llama_ok "构建工具检查通过" || llama_die "构建工具检查失败"
-
-# ninja 在 Debian/Ubuntu 上可能安装为 ninja-build
-if ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null; then
-    llama_die "缺少 ninja 或 ninja-build"
-fi
-
-if ! command -v nvcc &>/dev/null; then
-    llama_warn "未找到 nvcc，CUDA 支持可能不可用"
-else
-    llama_detail "NVCC: $(nvcc --version 2>/dev/null | tail -1)"
-fi
-
-llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die "llama.cpp 源码目录不存在"
-llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die "llama.cpp CMakeLists.txt 不存在"
-
-llama_check_gpu || :
-
-# --- 磁盘空间检查 --------------------------------------------
-llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die "磁盘空间不足"
-
-# --- 动态检测 ------------------------------------------------
-BUILD_DIR="${LLAMA_CPP_SRC}/build"
-JOBS=$(llama_get_cpu_count)
-llama_detail "并行编译任务数: $JOBS"
-
-# 自动检测 GCC/G++ 路径
-GCC_PATH=$(command -v gcc)
-GXX_PATH=$(command -v g++)
-llama_detail "C 编译器: $GCC_PATH"
-llama_detail "C++ 编译器: $GXX_PATH"
-
-# 自动检测 CUDA 库路径（用于 RPATH）
-# 背景：b8940 起 llama.cpp 将 CUDA 后端拆分为独立的 libggml-cuda.so，
-# 且 CUDA 依赖声明为 PRIVATE，不会通过 CMake 传播到最终可执行文件。
-# 当 CUDA 安装在非标准路径（如 Anaconda）时，链接器无法找到 libcudart.so / libcublas.so。
-# 此处通过 CMAKE_BUILD_RPATH 将 CUDA 库目录加入链接器搜索路径。
-#
-# ⚠️ 这是临时方案。如果未来 llama.cpp 在 CMake 中自行处理了 CUDA 库的 RPATH
-#    （例如将 PRIVATE 改为 PUBLIC，或显式设置 RPATH），则此处不再需要。
-#    验证方法：更新 llama.cpp 后，删除此处 CUDA_LIB_DIR 检测和 CMAKE_BUILD_RPATH，
-#    执行完整构建（bash build.sh），若链接阶段无 "libcudart.so.* not found" 错误，
-#    即说明 llama.cpp 已自行解决此问题，可安全移除。
-if command -v nvcc &>/dev/null; then
-    _NVCC_DIR=$(dirname "$(dirname "$(readlink -f "$(which nvcc)")")")
-    # 优先使用标准 CUDA 目录结构推断
-    CUDA_LIB_DIR="$_NVCC_DIR/targets/x86_64-linux/lib"
-    if [[ ! -d "$CUDA_LIB_DIR" ]]; then
-        # 回退：从 libcudart.so 位置反推
-        _CUDA_RT=$(find "$_NVCC_DIR" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
-        if [[ -n "$_CUDA_RT" ]]; then
-            CUDA_LIB_DIR=$(dirname "$(readlink -f "$_CUDA_RT")")
-        fi
-    fi
-    if [[ -n "$CUDA_LIB_DIR" && -d "$CUDA_LIB_DIR" ]]; then
-        llama_detail "CUDA 库路径: $CUDA_LIB_DIR"
-    else
-        llama_warn "无法自动检测 CUDA 库路径，构建可能失败"
-        CUDA_LIB_DIR=""
-    fi
-    unset _NVCC_DIR _CUDA_RT
-else
-    CUDA_LIB_DIR=""
-fi
 
 # --- 验证辅助函数 --------------------------------------------
 
@@ -252,6 +156,131 @@ _verify_openblas_runtime() {
         llama_warn "未检测到 OpenBLAS 动态库路径"
     fi
 }
+
+_verify_build() {
+    local errors=0
+    local bin_dir="${BUILD_DIR}/bin"
+
+    # 检查关键二进制文件
+    for binary in llama-cli llama-server; do
+        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || :
+    done
+
+    # 链接检查（非致命）
+    _verify_cuda_linking "$bin_dir" "llama-cli"
+    _verify_openblas_linking "$bin_dir" "llama-cli"
+
+    # 验证二进制文件可执行性
+    llama_info "验证二进制文件可执行性："
+    if "${bin_dir}/llama-cli" --version &>/dev/null; then
+        llama_ok "llama-cli 可正常启动"
+    else
+        llama_warn "llama-cli 启动验证失败"
+    fi
+
+    # 运行时验证（非致命）
+    _verify_cuda_devices "$bin_dir" || true
+    _verify_openblas_runtime "$bin_dir" "llama-cli" || true
+
+    return "$errors"
+}
+
+# --- 参数解析 ------------------------------------------------
+INCREMENTAL=0
+while (($# > 0)); do
+    case "$1" in
+        -i|--incremental)
+            INCREMENTAL=1
+            shift
+            ;;
+        -h|--help)
+            _show_help
+            llama_safe_exit 0
+            ;;
+        --version)
+            llama_show_version
+            llama_safe_exit 0
+            ;;
+        *)
+            llama_die "未知选项: $1"
+            ;;
+    esac
+done
+
+# --- 前置检查 ------------------------------------------------
+llama_step "前置检查"
+
+# shellcheck disable=SC2015
+    llama_check_commands \
+    cmake "cmake" \
+    gcc "gcc" \
+    g++ "g++" \
+    python3 "python3" \
+    && llama_ok "构建工具检查通过" || llama_die "构建工具检查失败"
+
+# ninja 在 Debian/Ubuntu 上可能安装为 ninja-build
+if ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null; then
+    llama_die "缺少 ninja 或 ninja-build"
+fi
+
+if ! command -v nvcc &>/dev/null; then
+    llama_warn "未找到 nvcc，CUDA 支持可能不可用"
+else
+    llama_detail "NVCC: $(nvcc --version 2>/dev/null | tail -1)"
+fi
+
+llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die "llama.cpp 源码目录不存在"
+llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die "llama.cpp CMakeLists.txt 不存在"
+
+llama_check_gpu || :
+
+# --- 磁盘空间检查 --------------------------------------------
+llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die "磁盘空间不足"
+
+# --- 动态检测 ------------------------------------------------
+BUILD_DIR="${LLAMA_CPP_SRC}/build"
+JOBS=$(llama_get_cpu_count)
+llama_detail "并行编译任务数: $JOBS"
+
+# 自动检测 GCC/G++ 路径
+GCC_PATH=$(command -v gcc)
+GXX_PATH=$(command -v g++)
+llama_detail "C 编译器: $GCC_PATH"
+llama_detail "C++ 编译器: $GXX_PATH"
+
+# 自动检测 CUDA 库路径（用于 RPATH）
+# 背景：b8940 起 llama.cpp 将 CUDA 后端拆分为独立的 libggml-cuda.so，
+# 且 CUDA 依赖声明为 PRIVATE，不会通过 CMake 传播到最终可执行文件。
+# 当 CUDA 安装在非标准路径（如 Anaconda）时，链接器无法找到 libcudart.so / libcublas.so。
+# 此处通过 CMAKE_BUILD_RPATH 将 CUDA 库目录加入链接器搜索路径。
+#
+# ⚠️ 这是临时方案。如果未来 llama.cpp 在 CMake 中自行处理了 CUDA 库的 RPATH
+#    （例如将 PRIVATE 改为 PUBLIC，或显式设置 RPATH），则此处不再需要。
+#    验证方法：更新 llama.cpp 后，删除此处 CUDA_LIB_DIR 检测和 CMAKE_BUILD_RPATH，
+#    执行完整构建（bash build.sh），若链接阶段无 "libcudart.so.* not found" 错误，
+#    即说明 llama.cpp 已自行解决此问题，可安全移除。
+if command -v nvcc &>/dev/null; then
+    _NVCC_DIR=$(dirname "$(dirname "$(readlink -f "$(which nvcc)")")")
+    # 优先使用标准 CUDA 目录结构推断
+    CUDA_LIB_DIR="$_NVCC_DIR/targets/x86_64-linux/lib"
+    if [[ ! -d "$CUDA_LIB_DIR" ]]; then
+        # 回退：从 libcudart.so 位置反推
+        _CUDA_RT=$(find "$_NVCC_DIR" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
+        if [[ -n "$_CUDA_RT" ]]; then
+            CUDA_LIB_DIR=$(dirname "$(readlink -f "$_CUDA_RT")")
+        fi
+    fi
+    if [[ -n "$CUDA_LIB_DIR" && -d "$CUDA_LIB_DIR" ]]; then
+        llama_detail "CUDA 库路径: $CUDA_LIB_DIR"
+    else
+        llama_warn "无法自动检测 CUDA 库路径，构建可能失败"
+        CUDA_LIB_DIR=""
+    fi
+    unset _NVCC_DIR _CUDA_RT
+else
+    CUDA_LIB_DIR=""
+fi
+
 # --- 步骤 1：清理旧构建 --------------------------------------
 if [[ "$INCREMENTAL" -eq 0 ]]; then
     llama_step "步骤 1/4：清理旧构建"
@@ -311,34 +340,6 @@ fi
 
 llama_ok "编译完成"
 
-# --- 验证构建 ------------------------------------------------
-_verify_build() {
-    local errors=0
-    local bin_dir="${BUILD_DIR}/bin"
-
-    # 检查关键二进制文件
-    for binary in llama-cli llama-server; do
-        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || :
-    done
-
-    # 链接检查（非致命）
-    _verify_cuda_linking "$bin_dir" "llama-cli" || true
-    _verify_openblas_linking "$bin_dir" "llama-cli" || true
-
-    # 验证二进制文件可执行性
-    llama_info "验证二进制文件可执行性："
-    if "${bin_dir}/llama-cli" --version &>/dev/null; then
-        llama_ok "llama-cli 可正常启动"
-    else
-        llama_warn "llama-cli 启动验证失败"
-    fi
-
-    # 运行时验证（非致命）
-    _verify_cuda_devices "$bin_dir" || true
-    _verify_openblas_runtime "$bin_dir" "llama-cli" || true
-
-    return "$errors"
-}
 
 # --- 步骤 4：验证构建 ----------------------------------------
 llama_step "步骤 4/4：验证构建"
@@ -349,7 +350,6 @@ if [[ "$VERIFY_EXIT" -gt 0 ]]; then
     llama_die "构建验证失败，${VERIFY_EXIT} 个错误"
 fi
 git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || :
-llama_safe_exit 0
-# shellcheck disable=SC2153
 echo -e "\n${GREEN}✅ 构建完成！${NC}\n"
 llama_print_run_examples "${BUILD_DIR}/bin"
+llama_safe_exit 0

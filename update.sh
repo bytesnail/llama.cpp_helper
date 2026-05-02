@@ -7,9 +7,9 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/common.sh"
-llama_source_deps
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/config.sh"
 
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || llama_die "无法获取文件锁"
@@ -42,16 +42,7 @@ _show_help() {
 }
 
 # --- 工具函数 ------------------------------------------------
-_print_section_header() {
-    local title="$1"
-    echo ""
-    echo "=========================================="
-    echo "  ${title}"
-    echo "=========================================="
-    echo ""
-}
 
-_is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
 
 # 保存当前状态以便回滚
 _save_state() {
@@ -70,7 +61,7 @@ _rollback() {
     fi
     # 清理回滚后可能出现的旧版本子模块残留
     if [[ "$failed" -eq 0 ]]; then
-        _cleanup_stale_submodules
+        llama_cleanup_stale_submodules
     fi
     if ! git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null; then
         llama_warn "子模块回滚不完全，可能需要手动处理"
@@ -82,72 +73,6 @@ _rollback() {
     return "$failed"
 }
 
-# 清理旧版本残留的子模块目录
-# git checkout 不会自动删除旧版本中已 init 但新版本不再追踪的子模块工作目录
-# 扫描工作目录中的 .git gitlink 文件，对比当前索引中的 submodule 路径，找出残留
-_cleanup_stale_submodules() {
-    local -A expected_paths
-    while IFS= read -r path; do
-        expected_paths["$path"]=1
-    done < <(git -C "$LLAMA_CPP_SRC" ls-files --stage | grep '^160000' | awk '{print $NF}')
-
-    local stale_count=0
-    local gitlink mod_dir
-    while IFS= read -r gitlink; do
-        # 使用 bash 参数扩展安全地剥离前缀，避免 sed 正则注入
-        gitlink="${gitlink#"${LLAMA_CPP_SRC}"/}"
-        mod_dir="$(dirname "$gitlink")"
-        # 跳过当前版本仍在追踪的 submodule
-        if [[ -v expected_paths[$mod_dir] ]]; then
-            continue
-        fi
-        # 确认是 submodule 的 gitlink 文件（内容为 gitdir:...）
-        if grep -q '^gitdir:' "${LLAMA_CPP_SRC}/${gitlink}" 2>/dev/null; then
-            llama_info "清理旧子模块残留: ${mod_dir}"
-            # shellcheck disable=SC2115
-            rm -rf "${LLAMA_CPP_SRC}/${gitlink}" "${LLAMA_CPP_SRC}/${mod_dir}"
-            # 清理 .git/modules/ 中对应的条目
-            local git_modules_dir="${LLAMA_CPP_SRC}/.git/modules/${mod_dir}"
-            if [[ -d "$git_modules_dir" ]]; then
-                rm -rf "$git_modules_dir"
-                llama_detail "清理 .git/modules: ${mod_dir}"
-            fi
-            ((stale_count++)) || :
-        fi
-    done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
-
-    if [[ "$stale_count" -gt 0 ]]; then
-        llama_ok "旧子模块清理完成 (${stale_count} 个)"
-    fi
-}
-
-# 检查当前构建是否完整可用
-# 返回 0 = 构建完整，1 = 构建缺失或不完整
-_check_build_health() {
-    local bin_dir="${LLAMA_CPP_SRC}/build/bin"
-    if [[ ! -d "$bin_dir" ]]; then
-        return 1
-    fi
-    # 检查关键二进制文件是否存在且可执行
-    for binary in llama-cli llama-server; do
-        if [[ ! -x "${bin_dir}/${binary}" ]]; then
-            return 1
-        fi
-    done
-    # 检查构建标记文件是否存在且与当前源码 commit 匹配
-    local build_stamp="${LLAMA_CPP_SRC}/build/.build-stamp"
-    local current_head
-    current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
-    if [[ -f "$build_stamp" ]]; then
-        local stamped_head
-        stamped_head=$(cat "$build_stamp" 2>/dev/null || echo "")
-        if [[ "$stamped_head" == "$current_head" ]]; then
-            return 0
-        fi
-    fi
-    # 没有标记文件或不匹配，说明 build 目录可能来自其他版本
-    return 1
-}
 
 # 打印构建成功的汇总信息
 # 参数: source_updated ("1"=源码已更新, "0"=仅重新构建), current_ver, target_ver, release_date
@@ -227,7 +152,7 @@ _fetch_latest_release_curl() {
 }
 
 # --- 主逻辑 --------------------------------------------------
-_print_section_header "llama.cpp 一键更新脚本"
+llama_step "llama.cpp 一键更新脚本"
 
 # 参数解析
 TARGET_VERSION=""
@@ -319,7 +244,7 @@ llama_detail "当前标签:    ${CURRENT_TAG}"
 if [[ -n "$TARGET_VERSION" ]]; then
     # 用户指定了版本
     RELEASE_TAG="$TARGET_VERSION"
-    if _is_full_commit_sha "$TARGET_VERSION"; then
+    if llama_is_full_commit_sha "$TARGET_VERSION"; then
         RELEASE_COMMIT="$TARGET_VERSION"
     fi
     llama_info "使用用户指定的版本: ${RELEASE_TAG}"
@@ -356,7 +281,7 @@ else
     RELEASE_SHORT="unknown"
 fi
 llama_detail "目标版本:    ${RELEASE_TAG}"
-if [[ -n "$RELEASE_COMMIT" ]] && _is_full_commit_sha "$RELEASE_COMMIT"; then
+if [[ -n "$RELEASE_COMMIT" ]] && llama_is_full_commit_sha "$RELEASE_COMMIT"; then
     llama_detail "对应 Commit: ${RELEASE_SHORT} (${RELEASE_COMMIT})"
 fi
 if [[ -n "$RELEASE_DATE" ]]; then
@@ -372,15 +297,14 @@ NEED_SOURCE_UPDATE=1
 if [[ "${CURRENT_TAG}" = "${RELEASE_TAG}" ]]; then
     llama_ok "本地已在该版本 (${RELEASE_TAG})，无需更新源码"
     NEED_SOURCE_UPDATE=0
-elif _is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$CURRENT_COMMIT" = "$RELEASE_COMMIT" ]]; then
+elif llama_is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$CURRENT_COMMIT" = "$RELEASE_COMMIT" ]]; then
     llama_ok "本地已是最新 commit (${RELEASE_SHORT})，无需更新源码"
     NEED_SOURCE_UPDATE=0
 fi
 
 if [[ "$NEED_SOURCE_UPDATE" -eq 0 ]]; then
     # 源码无需更新，检查构建是否完整
-    if _check_build_health; then
-        llama_ok "当前构建完整且与源码匹配，无需任何操作！"
+    if llama_check_build_health; then
         llama_ok "当前构建完整且与源码匹配，无需任何操作！"
         cd "$ORIG_DIR" >/dev/null
         llama_safe_exit 0
@@ -427,14 +351,14 @@ if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
         llama_warn "checkout 后标签不一致 (期望: ${RELEASE_TAG}, 实际: ${ACTUAL_TAG})"
     fi
 
-    if _is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$ACTUAL_COMMIT" != "$RELEASE_COMMIT" ]]; then
+    if llama_is_full_commit_sha "${RELEASE_COMMIT}" && [[ "$ACTUAL_COMMIT" != "$RELEASE_COMMIT" ]]; then
         llama_warn "checkout commit (${ACTUAL_COMMIT:0:7}) 与 API 返回的 commitish (${RELEASE_SHORT}) 不一致"
         llama_warn "但标签 ${RELEASE_TAG} 已确认 checkout 成功，继续构建..."
     fi
 
     llama_ok "源码已更新到 ${RELEASE_TAG} (${ACTUAL_COMMIT:0:7})"
     # 清理旧版本残留的子模块目录
-    _cleanup_stale_submodules
+    llama_cleanup_stale_submodules
 
     # 同步当前版本的子模块
     llama_info "同步子模块..."
@@ -453,9 +377,9 @@ fi
 
 # 构建（带失败回滚 + 回滚后重新构建）
 if [[ "$NEED_SOURCE_UPDATE" -eq 1 ]]; then
-    _print_section_header "源码更新完成，开始构建..."
+    llama_step "源码更新完成，开始构建..."
 else
-    _print_section_header "开始重新构建..."
+    llama_step "开始重新构建..."
 fi
 
 llama_release_lock
@@ -465,7 +389,7 @@ BUILD_STATUS=$?
 if [[ "$BUILD_STATUS" -ne 0 ]]; then
     _rollback
     llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
-    _print_section_header "回滚后重新构建..."
+    llama_step "回滚后重新构建..."
     llama_run_silent bash "$BUILD_SCRIPT"
     ROLLBACK_BUILD_STATUS=$?
     if [[ "$ROLLBACK_BUILD_STATUS" -ne 0 ]]; then

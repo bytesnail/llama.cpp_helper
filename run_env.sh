@@ -18,23 +18,14 @@ fi
 # 因为 source 时退出会影响当前 shell
 
 # 加载 common.sh
-#HM|# 保存颜色变量，以便在退出前恢复
-#KQ|#
-#QG|# run_env.sh 设计为被 source 执行，必须避免污染父 shell
-#WQ|# 因此需要在 source common.sh 之前保存父 shell 的颜色变量状态
-#YT|# 在脚本结束前恢复这些变量，确保父 shell 的环境不受影响
-#RZ|#
-#M5|# 注意：保存的变量可能为空值或未定义，恢复时会正确地 unset 它们
-#HM|# Save existing color variables to restore after execution
-#VX|# (run_env.sh is designed to be sourced; we must not pollute parent shell)
-# (run_env.sh is designed to be sourced; we must not pollute parent shell)
+# 保存/恢复颜色变量 — run_env.sh 被 source 执行，必须避免污染父 shell
 for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${_v}" '%s' "${!_v-}"
 done
 unset _v
 
 
-# Bootstrap: find and source common.sh (shared helpers not yet available)
+# 引导：查找并 source common.sh（共享辅助函数尚不可用）
 _BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" > /dev/null && pwd)"
 if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
     # shellcheck disable=SC2317
@@ -45,10 +36,10 @@ fi
 source "${_BOOT_DIR}/common.sh"
 unset _BOOT_DIR
 
-# Now shared helpers are available — properly set SCRIPT_DIR
+# 共享辅助函数已可用 — 正确设置 SCRIPT_DIR
 llama_init_script_dir
 
-# Source config.sh for version info (used by llama_show_version)
+# Source config.sh 以获取版本信息（用于 llama_show_version）
 if [[ -f "${SCRIPT_DIR}/config.sh" ]]; then
     # shellcheck source=/dev/null
     source "${SCRIPT_DIR}/config.sh"
@@ -189,7 +180,6 @@ main "$@"
 _main_rc=$?
 
 # 清理 common.sh 留下的颜色变量，防止污染父 shell
-# Restore color variables to their pre-existing values
 for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     _saved_var="_LLAMA_SAVED_${_v}"
     if [[ -n "${!_saved_var+isset}" ]]; then

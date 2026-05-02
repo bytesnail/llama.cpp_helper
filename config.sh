@@ -14,6 +14,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+# 防止重复 source
+_LLAMA_CONFIG_SOURCED=${_LLAMA_CONFIG_SOURCED:-0}
+if [[ "$_LLAMA_CONFIG_SOURCED" -eq 1 ]]; then
+    return 0 2>/dev/null || true
+fi
+_LLAMA_CONFIG_SOURCED=1
+
 # 允许通过环境变量覆盖，默认为固定路径
 LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-/mnt/hdd/projects/llama.cpp}"
 
@@ -25,7 +32,7 @@ REPO_URL="https://github.com/ggml-org/llama.cpp"
 MIN_FREE_DISK_GB=10
 LOCK_FILE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock"
 
-# Build configuration (overridable via environment)
+# 构建配置（可通过环境变量覆盖）
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES:-75}"
 CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS:---threads=0}"
@@ -35,5 +42,5 @@ GGML_NATIVE="${GGML_NATIVE:-ON}"
 GGML_BLAS="${GGML_BLAS:-ON}"
 GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
 
-# Version
+# 版本号
 LLAMA_HELPER_VERSION="1.0.0"
