@@ -20,8 +20,9 @@ if [[ "$_LLAMA_CONFIG_SOURCED" -eq 1 ]]; then
 fi
 _LLAMA_CONFIG_SOURCED=1
 
-# 允许通过环境变量覆盖，默认为固定路径
-LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-/mnt/hdd/projects/llama.cpp}"
+# 允许通过环境变量覆盖，默认为本项目相邻目录下的 llama.cpp
+_LLAMA_PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-${_LLAMA_PROJECT_ROOT}/../llama.cpp}"
 
 # 仓库信息
 REPO="ggml-org/llama.cpp"

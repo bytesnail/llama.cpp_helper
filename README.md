@@ -1,6 +1,6 @@
 # llama.cpp Helper Scripts
 
-针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理工具集，面向多路 NVIDIA GPU (NVLink) 工作站优化。
+针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理工具集，面向双路 NVIDIA RTX 2080 Ti (NVLink) 工作站优化。
 
 **版本：** 1.0.0
 
@@ -10,6 +10,7 @@
 
 - [环境要求](#环境要求)
 - [快速开始](#快速开始)
+- [⚠️ 重要警告](#️-重要警告)
 - [项目结构](#项目结构)
 - [脚本说明](#脚本说明)
   - [build.sh — 构建](#buildsh--构建)
@@ -31,14 +32,17 @@
 | Bash ≥ 4.2 | 需要关联数组 `declare -A` 和 `[[ -v ]]` 变量测试 |
 | CMake ≥ 3.20 | CMake 最低版本（llama.cpp 要求） |
 | Ninja | 构建工具（或 `ninja-build`） |
-| GCC / G++ | C/C++ 编译器 |
+| GCC / G++ ≥ 12.0 | C/C++ 编译器（GCC 12.x 已验证兼容 CUDA 13.0） |
 | CUDA Toolkit | 需 `nvcc` 可用（不强制特定版本） |
 | OpenBLAS | `libopenblas-dev` 开发包 |
 | Python 3 | JSON 解析（update.sh 使用） |
 | Git | 源码管理 |
+| `curl` | HTTP 客户端（update.sh 回退方案，优先使用 `gh`） |
 | `flock` | 文件锁（`util-linux` 包，通常预装） |
 
 > 磁盘空间：构建需要至少 10GB 可用空间（脚本自动检查）。
+
+> **目标硬件：** 本工具集针对 2× NVIDIA RTX 2080 Ti (NVLink) 工作站调优。默认参数（CUDA 架构 sm_75、P2P 直传、NVLink 优化）基于此配置。适用于任何 NVIDIA GPU，但可能需要调整 `CMAKE_CUDA_ARCHITECTURES`。
 
 ---
 
@@ -47,7 +51,7 @@
 ### 首次使用
 
 ```bash
-# 0. 克隆本项目
+# 0. 克隆本项目（请替换为实际仓库地址）
 git clone https://github.com/yourname/llama.cpp_helper
 cd llama.cpp_helper
 
@@ -88,6 +92,14 @@ bash build.sh -i
 
 ---
 
+## ⚠️ 重要警告
+
+- **禁止直接执行 `run_env.sh`**：必须使用 `source run_env.sh` 加载环境变量。直接运行 `bash run_env.sh` 会报错退出，且不会在当前 shell 中产生任何效果。
+- **禁止直接执行 `config.sh`**：`config.sh` 是 source-only 配置文件，由入口脚本自动加载。直接运行会提示错误。
+- **`common.sh` 由入口脚本自动 source**：无需手动加载。
+
+---
+
 ## 项目结构
 
 ```
@@ -116,13 +128,12 @@ update.sh   ──source──> common.sh ──source──> config.sh
 run_env.sh  ──source──> common.sh ──source──> config.sh
 ```
 
-| 文件 | 类型 | 职责 |
-|------|------|------|
-| `config.sh` | source-only | 纯数据：路径、构建常量、版本号。通过 `${VAR:-default}` 允许环境覆盖 |
-| `common.sh` | source-only | 共享函数库：日志、锁、信号、磁盘、GPU、退出辅助 |
-| `build.sh` | 入口脚本 | CMake 配置 + Ninja 编译 + 构建验证 |
-| `update.sh` | 入口脚本 | GitHub 查询 → 源码切换 → 构建 → 失败回滚 |
-| `run_env.sh` | source-only | 设置运行时 CUDA 性能优化变量 |
+| 层 | 文件 | LOC | 职责 |
+|----|------|-----|------|
+| 配置层 | `config.sh` | 47 | 纯数据：路径、构建常量、版本号。通过 `${VAR:-default}` 允许环境覆盖 |
+| 工具层 | `common.sh` | 465 | 共享函数库：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 368/487/186 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
+| 测试层 | `tests/` | 568 | 每个源文件对应一个 `test_*.bats`（共 73 项） |
 
 > `config.sh` 和 `common.sh` 由入口脚本 source，不可直接执行。`run_env.sh` 仅能通过 `source` 使用。
 
@@ -141,7 +152,7 @@ bash build.sh       # 完整重新构建（清理 + 配置 + 编译）
 bash build.sh -i    # 增量构建（保留 build 目录，仅重新编译变更）
 ```
 
-**安全特性：** 文件锁、磁盘空间预检查（≥10GB）、信号处理（中断时自动清理未完成构建）。
+**安全特性：** 文件锁、磁盘空间预检查（≥10GB）、信号处理（中断时自动清理未完成构建）、构建标记（`.build-stamp` 记录源码 commit，供 `update.sh` 检测过期构建）。
 
 **构建验证：**
 - 检查 `llama-cli` 和 `llama-server` 二进制文件存在性及大小
@@ -149,6 +160,7 @@ bash build.sh -i    # 增量构建（保留 build 目录，仅重新编译变更
 - 验证 OpenBLAS 动态库链接及运行时可加载性
 - 通过 `llama-bench --help` 检测 CUDA 设备列表
 - 验证 `llama-cli --version` 可正常启动
+- 写入构建标记（`.build-stamp`），记录当前构建对应的源码 commit
 
 ### update.sh — 更新
 
@@ -165,7 +177,7 @@ bash update.sh b8941   # 更新到指定标签
 **更新流程：**
 1. 前置检查（工具、仓库、未提交更改）
 2. 查询目标版本（GitHub API，优先 `gh`）
-3. 版本对比（已是最新则检查构建完整性，跳过更新）
+3. 版本对比（已是最新则检查构建完整性，无需操作则自动跳过）
 4. 拉取 → checkout → 同步子模块 → 清理旧子模块残留
 5. 调用 `build.sh` 构建
 6. 构建失败 → 自动回滚 + 回滚后重新构建
@@ -176,7 +188,7 @@ bash update.sh b8941   # 更新到指定标签
 
 ```bash
 source run_env.sh           # 加载环境变量
-source run_env.sh --status  # 查看当前环境状态（不修改）
+source run_env.sh --status  # 查看环境变量状态 + GPU 信息（名称、显存、温度、利用率）
 ```
 
 > **⚠️ 必须使用 `source` 执行**，直接运行 `bash run_env.sh` 会报错退出。`source` 确保变量在当前 shell 中生效。
@@ -237,15 +249,12 @@ LLAMA_CPP_SRC="/your/path/to/llama.cpp" bash build.sh
 
 #### 可选 CUDA 运行时变量
 
-除 `run_env.sh` 设置的变量外，可根据需要手动设置以下 CUDA 相关运行时变量：
+以下变量由 `run_env.sh` 执行时输出建议。完整列表请参考 [ggml CUDA 后端文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/CUDA.md)。
 
 | 变量 | 说明 |
 |------|------|
 | `GGML_CUDA_GRAPH_OPT=1` | 启用 CUDA 图优化（单 GPU 场景受益） |
 | `GGML_CUDA_NO_PINNED=1` | 禁用固定内存（低显存场景） |
-| `GGML_CUDA_DISABLE_FUSION=1` | 禁用 kernel fusion（调试用途） |
-| `GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F=1` | 强制 FP32 计算（精度优先） |
-| `GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F=1` | 强制 FP16 计算（速度优先） |
 
 ---
 
@@ -258,7 +267,7 @@ LLAMA_CPP_SRC="/your/path/to/llama.cpp" bash build.sh
 **可能原因：**
 - CUDA 工具链未正确安装或 `nvcc` 不在 `PATH` 中
 - OpenBLAS 开发包缺失 → `sudo apt install libopenblas-dev`
-- GCC 版本与 CUDA 版本不兼容
+- GCC 版本与 CUDA 版本不兼容（需 GCC ≥ 12.0）
 - `cmake` 或 `ninja` 未安装
 
 **排查：** 检查 `cmake --version`、`nvcc --version`、`ldconfig -p | grep openblas`。
@@ -303,7 +312,7 @@ git submodule update --recursive
 
 锁文件位置：`${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock`
 
-**残留锁自动恢复：** 如果上一個进程异常终止，下次运行时脚本会自动检测并清理残留锁。
+**残留锁自动恢复：** 如果上一个进程异常终止，下次运行时脚本会自动检测并清理残留锁。
 
 ### CUDA 库路径检测失败
 
@@ -348,9 +357,12 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标
 make lint       # ShellCheck 静态分析（5 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件
+make test       # bats-core 测试套件（73 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
+
+# 运行单个测试文件
+bats tests/test_common.bats
 ```
 
 **测试依赖：** `bats-core` 和 `shellcheck`。
