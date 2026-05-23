@@ -439,3 +439,71 @@ teardown() {
     [ "$status" -eq 0 ]
     [ "$output" = "2KiB" ]
 }
+
+# --- conda Activation ---
+@test "llama_activate_conda skips when CONDA_AUTO_ACTIVATE=0" {
+    CONDA_AUTO_ACTIVATE=0 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"conda"* ]]
+}
+
+@test "llama_activate_conda skips when already activated (CONDA_PREFIX set)" {
+    CONDA_PREFIX="/fake/conda/env" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "conda 环境已激活" ]]
+}
+
+@test "llama_activate_conda returns 0 when no conda found" {
+    unset CONDA_EXE CONDA_PREFIX
+    run llama_activate_conda
+    [ "$status" -eq 0 ]
+}
+
+@test "llama_activate_conda detects conda from CONDA_EXE" {
+    local mock_base="${TEST_TMPDIR}/mock_conda"
+    mkdir -p "${mock_base}/etc/profile.d"
+    mkdir -p "${mock_base}/bin"
+    echo '#!/bin/bash' > "${mock_base}/bin/conda"
+    chmod +x "${mock_base}/bin/conda"
+    echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_base}'/envs/${2:-base}"; return 0; fi; }' \
+        > "${mock_base}/etc/profile.d/conda.sh"
+    CONDA_EXE="${mock_base}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "已激活 conda 环境" ]]
+}
+
+@test "llama_activate_conda detects conda from common path" {
+    local mock_home="${TEST_TMPDIR}/fake_home"
+    mkdir -p "${mock_home}/miniconda3/etc/profile.d"
+    echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_home}'/miniconda3/envs/${2:-base}"; return 0; fi; }' \
+        > "${mock_home}/miniconda3/etc/profile.d/conda.sh"
+    unset CONDA_EXE CONDA_PREFIX
+    HOME="$mock_home" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "已激活 conda 环境" ]]
+}
+
+@test "llama_activate_conda warns when conda.sh missing" {
+    local mock_broken="${TEST_TMPDIR}/mock_broken"
+    mkdir -p "${mock_broken}/bin"
+    echo '#!/bin/bash' > "${mock_broken}/bin/conda"
+    chmod +x "${mock_broken}/bin/conda"
+    # Intentionally do NOT create etc/profile.d/conda.sh — simulate broken install
+    CONDA_EXE="${mock_broken}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "缺少 shell 初始化脚本" ]]
+}
+
+@test "llama_activate_conda warns on conda activate failure" {
+    local mock_fail="${TEST_TMPDIR}/mock_fail"
+    mkdir -p "${mock_fail}/etc/profile.d"
+    mkdir -p "${mock_fail}/bin"
+    echo '#!/bin/bash' > "${mock_fail}/bin/conda"
+    chmod +x "${mock_fail}/bin/conda"
+    echo 'conda() { if [[ "$1" == "activate" ]]; then echo "环境不存在" >&2; return 1; fi; }' \
+        > "${mock_fail}/etc/profile.d/conda.sh"
+    CONDA_EXE="${mock_fail}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "conda 环境激活失败" ]]
+    [[ "$output" =~ "环境不存在" ]]
+}

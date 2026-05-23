@@ -136,6 +136,77 @@ llama_check_gpu() {
     return 1
 }
 
+# --- conda 环境 -----------------------------------------------
+# Usage: llama_activate_conda
+# Detects and activates conda environment. Respects CONDA_AUTO_ACTIVATE
+# and CONDA_ENV_NAME from config.sh. Never fails — always returns 0.
+llama_activate_conda() {
+    if [[ "${CONDA_AUTO_ACTIVATE:-1}" != "1" ]]; then
+        return 0
+    fi
+
+    if [[ -n "${CONDA_PREFIX:-}" ]]; then
+        llama_info "conda 环境已激活: ${CONDA_PREFIX}"
+        return 0
+    fi
+
+    local conda_root=""
+
+    if [[ -n "${CONDA_EXE:-}" && -x "$CONDA_EXE" ]]; then
+        conda_root="$(cd "$(dirname "$CONDA_EXE")/.." 2>/dev/null && pwd)" || true
+    fi
+
+    if [[ -z "$conda_root" ]]; then
+        local _candidate
+        for _candidate in \
+            "${HOME}/miniconda3" \
+            "${HOME}/anaconda3" \
+            "${HOME}/miniforge3" \
+            "${HOME}/miniconda4" \
+            "/opt/conda" \
+            "/opt/miniconda3" \
+            "/opt/anaconda3" \
+            "/opt/miniforge3"
+        do
+            if [[ -f "${_candidate}/etc/profile.d/conda.sh" ]]; then
+                conda_root="$_candidate"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$conda_root" ]]; then
+        if command -v conda &>/dev/null; then
+            conda_root="$(conda info --base 2>/dev/null || true)"
+        fi
+    fi
+
+    if [[ -z "$conda_root" ]]; then
+        return 0
+    fi
+
+    local conda_sh="${conda_root}/etc/profile.d/conda.sh"
+    if [[ ! -f "$conda_sh" ]]; then
+        llama_warn "找到 conda 安装 (${conda_root}) 但缺少 shell 初始化脚本"
+        return 0
+    fi
+
+    # shellcheck source=/dev/null
+    source "$conda_sh"
+
+    local env_name="${CONDA_ENV_NAME:-base}"
+    local activate_err
+    activate_err=$(conda activate "$env_name" 2>&1) && activate_err=""
+    if [[ -z "$activate_err" ]]; then
+        llama_ok "已激活 conda 环境: ${env_name}"
+    else
+        llama_warn "conda 环境激活失败: ${env_name}"
+        llama_detail "$activate_err"
+    fi
+
+    return 0
+}
+
 # --- 文件锁 --------------------------------------------------
 # 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
 

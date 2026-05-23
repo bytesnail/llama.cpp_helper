@@ -132,6 +132,8 @@ main() {
     # --- 设置环境变量 --------------------------------------------
     llama_step "设置 llama.cpp 运行环境"
 
+    # 激活 conda 环境（如果可用）
+    llama_activate_conda
     # 检测 GPU
     local GPU_COUNT
     GPU_COUNT=$(llama_get_gpu_count)

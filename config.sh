@@ -42,6 +42,9 @@ GGML_NATIVE="${GGML_NATIVE:-ON}"
 GGML_BLAS="${GGML_BLAS:-ON}"
 GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
 
+# conda 配置
+CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 激活的 conda 环境名称
 # 关键二进制文件（构建验证和健康检查使用）
 REQUIRED_BINARIES=("llama-cli" "llama-server")
 # 版本号
