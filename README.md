@@ -234,6 +234,23 @@ GGML_BLAS="OFF" bash build.sh
 LLAMA_CPP_SRC="/your/path/to/llama.cpp" bash build.sh
 ```
 
+### conda 配置
+
+以下变量控制 `run_env.sh` 的 conda 自动激活行为。可通过环境变量覆盖。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CONDA_AUTO_ACTIVATE` | `1` | 自动激活 conda 环境（0=跳过, 1=自动激活） |
+| `CONDA_ENV_NAME` | `base` | 激活的 conda 环境名称 |
+
+```bash
+# 跳过 conda 自动激活
+CONDA_AUTO_ACTIVATE=0 source run_env.sh
+
+# 激活指定 conda 环境
+CONDA_ENV_NAME=llama-cpp source run_env.sh
+```
+
 ### 运行时环境变量
 
 #### run_env.sh 设置的变量
