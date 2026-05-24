@@ -490,8 +490,7 @@ llama_init_script_dir() {
     export SCRIPT_DIR
 }
 
-# Note: Help text labels (用法/描述/选项/示例) are intentionally in Chinese
-# for this project's target audience. See common.sh for language policy.
+# Help text labels follow the language policy defined at file top (L14-15).
 
 llama_show_help() {
     local script_name="$1"
@@ -520,6 +519,8 @@ llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
 }
 
+# Usage: llama_save_colors
+# Saves current color variable values for later restoration.
 llama_save_colors() {
     local _cvar
     for _cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
@@ -527,6 +528,8 @@ llama_save_colors() {
     done
 }
 
+# Usage: llama_restore_colors
+# Restores color variables saved by llama_save_colors. Cleans up temp vars.
 llama_restore_colors() {
     local _cvar _saved_var
     for _cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
@@ -543,8 +546,9 @@ llama_restore_colors() {
 # Usage: llama_print_run_examples <bin_dir>
 llama_print_run_examples() {
     local bin_dir="${1:?bin_dir required}"
+    local script_dir="${SCRIPT_DIR:-.}"
     echo "运行示例:"
-    echo "  source ${SCRIPT_DIR}/run_env.sh"
+    echo "  source ${script_dir}/run_env.sh"
     echo "  ${bin_dir}/llama-cli -m /path/to/model.gguf -ngl 99 -p \"你好\""
     echo "  ${bin_dir}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
 }

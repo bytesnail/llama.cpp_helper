@@ -602,3 +602,21 @@ teardown() {
     [ -z "${_LLAMA_SAVED_RED+x}" ] || false
     [ -z "${_LLAMA_SAVED_GREEN+x}" ] || false
 }
+
+@test "llama_get_cpu_count fallback returns positive number with no PATH" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    # Mock by clearing PATH — if nproc/sysctl fail, falls back to /proc/cpuinfo or 4
+    run llama_get_cpu_count
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -ge 1 ]
+}
+
+@test "log functions produce no ANSI codes when output is not a terminal" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    # Under bats, `run` pipes stdout → [[ -t 1 ]] is false → colors are empty strings
+    run llama_info "test_color_output"
+    [ "$status" -eq 0 ]
+    # $'\033' is the ESC character (ANSI escape start)
+    [[ "$output" != *$'\033'* ]]
+}

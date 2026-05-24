@@ -71,8 +71,50 @@ load test_helper
         CURRENT_COMMIT=$(git -C "${LLAMA_CPP_SRC}" rev-parse HEAD)
         CURRENT_SHORT=$(git -C "${LLAMA_CPP_SRC}" rev-parse --short HEAD)
         CURRENT_TAG=$(git -C "${LLAMA_CPP_SRC}" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
-        CURRENT_BRANCH=$(git -C "${LLAMA_CPP_SRC}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        CURRENT_BRANCH=$(git -C "${LLAMA_CPP_SRC}" symbolic-ref --short HEAD 2>/dev/null || echo "")
     }
     _save_state
     [ "$CURRENT_BRANCH" = "test-branch" ]
+}
+
+@test "_print_success_summary outputs expected format" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+
+    # Extract _print_success_summary from update.sh
+    eval "$(sed -n '/^_print_success_summary()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+
+    # llama_print_run_examples needs SCRIPT_DIR
+    llama_init_script_dir
+
+    CURRENT_SHORT="abc1234"
+    RELEASE_TAG="b4000"
+    CURRENT_TAG="(旧标签)"
+    run _print_success_summary 1 "旧版" "b4000" "2026-01-01"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"abc1234"* || "$output" == *"旧版"* ]]
+    [[ "$output" == *"b4000"* ]]
+}
+
+@test "_cleanup_stale_submodules handles no stale entries cleanly" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+
+    # Create a minimal git repo with a .gitmodules file (no stale entries)
+    local fake_repo="${TEST_TMPDIR}/clean_repo"
+    mkdir -p "$fake_repo"
+    git -C "$fake_repo" init -q
+    git -C "$fake_repo" commit --allow-empty -q -m "init"
+    # Create a valid submodule entry to make find not prune everything
+    mkdir -p "${fake_repo}/sub"
+    touch "${fake_repo}/sub/.git"  # regular file, not gitdir ref — won't match grep
+    git -C "$fake_repo" add sub/.git 2>/dev/null || true
+
+    # Extract _cleanup_stale_submodules from update.sh
+    eval "$(sed -n '/^_cleanup_stale_submodules()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+
+    LLAMA_CPP_SRC="$fake_repo" run _cleanup_stale_submodules
+    [ "$status" -eq 0 ]
+    # No stale entries means no cleanup output message
+    [[ "$output" != *"清理旧子模块"* ]]
 }

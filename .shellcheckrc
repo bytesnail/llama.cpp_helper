@@ -5,7 +5,7 @@ shell=bash
 external-sources=true
 
 # Source path for shellcheck source resolution
-source-path=.
+source-path=SCRIPTDIR
 
 # Warnings to exclude
 # Note: verified non-triggering on shellcheck 0.10.0; kept for older versions

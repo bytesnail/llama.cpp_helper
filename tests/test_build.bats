@@ -48,3 +48,20 @@ load test_helper
     [ "$status" -eq 0 ]
     [[ "$output" =~ "未指定二进制目录" ]]
 }
+
+@test "_detect_cuda_lib_dir returns failure when nvcc not found" {
+    # Source common.sh for llama_* functions, config.sh for config vars
+    source "${BATS_TEST_DIRNAME}/../common.sh"
+    # shellcheck source=/dev/null
+    source "${BATS_TEST_DIRNAME}/../config.sh"
+
+    # Extract _detect_cuda_lib_dir function from build.sh without executing top-level code
+    eval "$(sed -n '/^_detect_cuda_lib_dir()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+
+    local _saved_path="$PATH"
+    export PATH="/nonexistent"
+    run _detect_cuda_lib_dir
+    export PATH="$_saved_path"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}

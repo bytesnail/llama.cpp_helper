@@ -50,8 +50,8 @@ CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 激活的 conda 环境名称
 
 # 网络超时配置（可通过环境变量覆盖）
-CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
-CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # seconds; update.sh HTTP connection timeout
+CURL_MAX_TIME="${CURL_MAX_TIME:-30}"                 # seconds; update.sh HTTP max request time
 # 关键二进制文件（构建验证和健康检查使用）
 REQUIRED_BINARIES=("llama-cli" "llama-server")
 readonly REQUIRED_BINARIES

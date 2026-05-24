@@ -79,7 +79,7 @@ _detect_cuda_lib_dir() {
 # --- 验证辅助函数 --------------------------------------------
 
 # 检查单个二进制文件是否存在并报告大小
-# 参数: $1=binary_name, $2=bin_dir
+# Usage: $1=binary_name, $2=bin_dir
 # 返回: 0=存在, 1=缺失
 _verify_binary_exists() {
     local binary="$1"
@@ -103,7 +103,7 @@ _verify_binary_exists() {
     fi
 }
 # 通用链接验证函数
-# 参数: $1=bin_dir, $2=binary (default: llama-cli), $3=grep_pattern, $4=label, $5=not_found_msg
+# Usage: $1=bin_dir, $2=binary (default: llama-cli), $3=grep_pattern, $4=label, $5=not_found_msg
 _verify_linking() {
     local bin_dir="$1"
     if [[ -z "$bin_dir" ]]; then
@@ -135,19 +135,19 @@ _verify_linking() {
 }
 
 # 检查 CUDA 动态库链接
-# 参数: $1=bin_dir, $2=binary (default: llama-cli)
+# Usage: $1=bin_dir, $2=binary (default: llama-cli)
 _verify_cuda_linking() {
     _verify_linking "${1:-}" "${2:-llama-cli}" "libcudart|libcublas|libcuda" "CUDA" "未找到 CUDA 动态库链接（可能是静态链接）"
 }
 
 # 检查 OpenBLAS 链接
-# 参数: $1=bin_dir, $2=binary (default: llama-cli)
+# Usage: $1=bin_dir, $2=binary (default: llama-cli)
 _verify_openblas_linking() {
     _verify_linking "${1:-}" "${2:-llama-cli}" "openblas|blas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
 }
 
 # 检查 CUDA 设备 (llama-bench --help 会触发 CUDA 初始化并打印设备信息)
-# 参数: $1=bin_dir
+# Usage: $1=bin_dir
 _verify_cuda_devices() {
     local bin_dir="$1"
 
@@ -169,7 +169,7 @@ _verify_cuda_devices() {
 }
 
 # 验证 OpenBLAS 运行时可用性
-# 参数: $1=bin_dir, $2=binary (default: llama-cli)
+# Usage: $1=bin_dir, $2=binary (default: llama-cli)
 _verify_openblas_runtime() {
     local bin_dir="$1"
     local binary="${2:-llama-cli}"
@@ -192,27 +192,29 @@ _verify_openblas_runtime() {
 _verify_build() {
     local errors=0
     local bin_dir="${BUILD_DIR}/bin"
+    local _verify_binary="${REQUIRED_BINARIES[0]}"
 
     # 检查关键二进制文件
     for binary in "${REQUIRED_BINARIES[@]}"; do
-        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || true  # || true: ((0)) is exit code 1 under set -e
+        _verify_binary_exists "$binary" "$bin_dir" || errors=$((errors + 1))
     done
 
     # 链接检查（非致命）
-    _verify_cuda_linking "$bin_dir" "llama-cli"
-    _verify_openblas_linking "$bin_dir" "llama-cli"
+    _verify_cuda_linking "$bin_dir" "$_verify_binary"
+    _verify_openblas_linking "$bin_dir" "$_verify_binary"
 
     # 验证二进制文件可执行性
     llama_info "验证二进制文件可执行性："
-    if "${bin_dir}/llama-cli" --version &>/dev/null; then
-        llama_ok "llama-cli 可正常启动"
+    if "${bin_dir}/${_verify_binary}" --version &>/dev/null; then
+        llama_ok "${_verify_binary} 可正常启动"
     else
-        llama_warn "llama-cli 启动验证失败"
+        llama_warn "${_verify_binary} 启动验证失败"
     fi
 
     # 运行时验证（非致命）
-    _verify_cuda_devices "$bin_dir" || true
-    _verify_openblas_runtime "$bin_dir" "llama-cli" || true
+    local _vr_rc=0
+    _verify_cuda_devices "$bin_dir" || _vr_rc=$?
+    _verify_openblas_runtime "$bin_dir" "$_verify_binary" || _vr_rc=$?
 
     return "$errors"
 }
@@ -348,7 +350,7 @@ INCREMENTAL=0  # 脚本级变量：trap handler 无法访问 main() 的 local �
     # --- 步骤 3：编译 --------------------------------------------
     llama_step "步骤 3/4：编译（${JOBS} 核并行）"
 
-    llama_run_silent cmake --build "$BUILD_DIR" --config Release -j "$JOBS"
+    llama_run_silent cmake --build "$BUILD_DIR" -j "$JOBS"
     local build_exit=$?
 
     if [[ "$build_exit" -ne 0 ]]; then

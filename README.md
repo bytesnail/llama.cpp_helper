@@ -4,6 +4,8 @@
 
 **版本：** 1.0.0
 
+> 开发者内部参考（架构、命名约定、反模式、安全特性）：参见 [AGENTS.md](AGENTS.md)
+
 ---
 
 ## 目录
@@ -111,6 +113,7 @@ bash build.sh -i
 ├── run_env.sh        # 运行时环境（source-only，设置 CUDA P2P 等变量）
 ├── Makefile          # lint / syntax / test / check
 ├── .shellcheckrc     # ShellCheck 规则豁免
+├── .editorconfig     # EditorConfig for consistent editor settings
 └── tests/            # bats-core 测试套件
     ├── test_helper.bash
     ├── test_common.bats
@@ -135,8 +138,8 @@ run_env.sh  ──source──> common.sh
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。通过 `${VAR:-default}` 允许环境覆盖 |
 | 工具层 | `common.sh` | 562 | 共享函数库：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 378/516/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
-| 测试层 | `tests/` | 835 | 每个源文件对应一个 `test_*.bats`（共 99 项） |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 380/525/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
+| 测试层 | `tests/` | 912 | 每个源文件对应一个 `test_*.bats`（共 104 项） |
 
 > `config.sh` 和 `common.sh` 由入口脚本 source，不可直接执行。`run_env.sh` 仅能通过 `source` 使用。
 
@@ -390,7 +393,7 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（5 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（99 项）
+make test       # bats-core 测试套件（104 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 

@@ -55,7 +55,12 @@ _save_state() {
     CURRENT_COMMIT=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
     CURRENT_SHORT=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD)
     CURRENT_TAG=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
-    CURRENT_BRANCH=$(git -C "$LLAMA_CPP_SRC" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    local _branch
+    if _branch=$(git -C "$LLAMA_CPP_SRC" symbolic-ref --short HEAD 2>/dev/null); then
+        CURRENT_BRANCH="$_branch"
+    else
+        CURRENT_BRANCH=""
+    fi
 }
 
 # 回滚到之前的状态
@@ -397,7 +402,11 @@ _update_source() {
 
     # 尝试 fetch 特定标签（如果是标签的话）
     if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "refs/tags/${RELEASE_TAG}"; then
-        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
+        local _tag_fetch_rc=0
+        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || _tag_fetch_rc=$?
+        if [[ "$_tag_fetch_rc" -ne 0 ]]; then
+            llama_detail "特定标签 ref fetch 失败 (退出码: ${_tag_fetch_rc})，将使用已拉取的标签"
+        fi
     fi
 
     if ! git rev-parse --verify "${RELEASE_TAG}^{commit}" &>/dev/null; then
