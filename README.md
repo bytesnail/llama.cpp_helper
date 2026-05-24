@@ -52,7 +52,7 @@
 
 ```bash
 # 0. 克隆本项目（请替换为实际仓库地址）
-git clone https://github.com/yourname/llama.cpp_helper
+git clone <your-repo-url>  # 替换为实际仓库地址
 cd llama.cpp_helper
 
 # 1. 克隆 llama.cpp 到相邻目录
@@ -134,9 +134,9 @@ run_env.sh  ──source──> common.sh
 | 层 | 文件 | LOC | 职责 |
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。通过 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 542 | 共享函数库：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 362/497/199 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
-| 测试层 | `tests/` | 729 | 每个源文件对应一个 `test_*.bats`（共 90 项） |
+| 工具层 | `common.sh` | 558 | 共享函数库：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 366/505/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
+| 测试层 | `tests/` | 758 | 每个源文件对应一个 `test_*.bats`（共 94 项） |
 
 > `config.sh` 和 `common.sh` 由入口脚本 source，不可直接执行。`run_env.sh` 仅能通过 `source` 使用。
 
@@ -387,10 +387,10 @@ sudo apt install util-linux  # Debian/Ubuntu
 ## 开发
 
 ```bash
-make help       # 显示可用目标
+make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（5 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（90 项）
+make test       # bats-core 测试套件（94 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 

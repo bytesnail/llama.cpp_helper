@@ -1,12 +1,12 @@
 # PROJECT KNOWLEDGE BASE
 
 **生成时间：** 2026-05-24
-**提交：** 7bf6d89
+**提交：** e8d1239
 **分支：** main
 
 ## 概述
 
-llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~1660 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 90 项测试。
+llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~1685 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 94 项测试。
 
 ## 结构
 
@@ -19,9 +19,9 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~
 ├── config.sh         # 集中配置（路径/构建常量/版本号）
 ├── Makefile          # lint / syntax / test / check
 ├── .shellcheckrc     # ShellCheck 规则豁免（4 条）
-└── tests/            # bats-core 测试套件（90 项）
+└── tests/            # bats-core 测试套件（94 项）
     ├── test_helper.bash   # 共享 setup/teardown
-    ├── test_common.bats   # common.sh 全套函数测试（68 项）
+    ├── test_common.bats   # common.sh 全套函数测试（69 项）
     ├── test_smoke.bats    # 环境冒烟测试
     ├── test_build.bats    # build.sh CLI 接口测试
     ├── test_update.bats   # update.sh CLI 接口测试
@@ -44,9 +44,9 @@ run_env.sh  ──source──> common.sh
 | 层 | 文件 | LOC | 职责 |
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 542 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 362/497/199 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
-| 测试层 | `tests/` | 729 | 每个源文件对应一个 `test_*.bats` |
+| 工具层 | `common.sh` | 558 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 366/505/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
+| 测试层 | `tests/` | 758 | 每个源文件对应一个 `test_*.bats` |
 
 ## 何处查找
 
@@ -59,13 +59,14 @@ run_env.sh  ──source──> common.sh
 | 修改测试 | `tests/test_<name>.bats` | 每脚本对应一个文件 |
 | 测试辅助函数 | `tests/test_helper.bash` | setup/teardown + 共享 fixture |
 | ShellCheck 规则调整 | `.shellcheckrc` | 每条 disable 有中文注释说明原因 |
+- **ShellCheck**：`.shellcheckrc` 禁用规则（SC2034/SC2119/SC2312/SC2317）经验证在 0.10.0 版本未触发，保留以供旧版本兼容
 
 ## 命名约定
 
 | 类型 | 模式 | 示例 |
 |------|------|------|
 | 公开函数 | `llama_<verb>` / `llama_<noun>_<verb>` | `llama_info`, `llama_acquire_lock` |
-| 私有函数 | `_<lowercase_snake>` | `_show_help`, `_verify_binary_exists` |
+| 私有函数 | `_<lowercase_snake>` | `_show_help`, `_verify_binary_exists`, `_recover_stale_lock` |
 | 全局常量 | `UPPER_SNAKE_CASE` | `REPO`, `MIN_FREE_DISK_GB` |
 | 可覆盖变量 | `UPPER_SNAKE_CASE` + `${VAR:-default}` | `LLAMA_CPP_SRC`, `CMAKE_BUILD_TYPE`, `CMAKE_CUDA_ARCHITECTURES` |
 | 局部变量 | `lowercase_snake` | `local exit_code=$?` |
@@ -102,7 +103,7 @@ run_env.sh  ──source──> common.sh
 1. **绝不直接执行** `config.sh` 或 `run_env.sh` — 它们有 source-only 守卫。`run_env.sh` 只能用 `source run_env.sh`
 2. **绝不在 source 脚本中无条件启用** `set -euo pipefail` — 会导致父 shell 退出
 3. **绝不删除锁文件** — `flock` 基于 inode，删除会导致等待进程锁住已删除 inode。`llama_release_lock` 只关 FD
-4. **绝不在 Python 中嵌入文件路径** — 使用 `< "$tmp"` stdin 重定向避免路径注入（参考 `_json_field_curl`）
+4. **绝不在 Python 中嵌入字段名** — 使用 `sys.argv[1]` 传递字段名避免 Python 注入（参考 `_json_field_gh` / `_json_field_curl`）
 5. **source 脚本绝不污染父 shell 颜色变量** — `run_env.sh` 使用内联代码保存颜色（等价于 llama_save_colors），然后调用 llama_restore_colors 恢复
 6. **绝不启用** `GGML_CUDA_ENABLE_UNIFIED_MEMORY` — 离散 GPU（RTX 2080 Ti）有害。仅集成 GPU 或 OOM 时手动启用
 
@@ -119,7 +120,7 @@ run_env.sh  ──source──> common.sh
 ```bash
 make lint           # ShellCheck 静态分析（5 个脚本）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（90 项）
+make test           # bats-core 测试套件（94 项）
 make check          # lint + syntax + test 全部
 make all            # 等同于 check
 
@@ -145,7 +146,7 @@ bash update.sh b3631            # 更新到指定 commit
 
 ## 注意事项
 
-- **临时方案**：`build.sh` L270-273 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
+- **临时方案**：`build.sh` L276-287 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
 - **测试未覆盖端到端构建**：`build.sh` 和 `update.sh` 的测试只覆盖 CLI 接口（`--help`, `--version`, 参数解析），实际构建/更新行为不在此项目的测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行
