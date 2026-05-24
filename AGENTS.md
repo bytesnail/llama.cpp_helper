@@ -6,7 +6,7 @@
 
 ## 概述
 
-llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~1731 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 104 项测试。
+llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~1732 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 104 项测试。
 
 用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。本文档面向 AI 代理和开发者。
 
@@ -21,7 +21,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
 | 工具层 | `common.sh` | 566 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 380/525/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 380/526/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
 | 测试层 | `tests/` | 912 | 每个源文件对应一个 `test_*.bats` |
 
 ## 何处查找

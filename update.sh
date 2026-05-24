@@ -156,7 +156,8 @@ _json_field_curl() {
 }
 
 # 打印构建成功的汇总信息
-# 参数: source_updated ("1"=源码已更新, "0"=仅重新构建), current_ver, target_ver, release_date
+# Usage: _print_success_summary <source_updated> <current_ver> <target_ver> <release_date>
+#   source_updated: "1"=源码已更新, "0"=仅重新构建
 _print_success_summary() {
     local source_updated="$1"
     local current_ver="$2"
