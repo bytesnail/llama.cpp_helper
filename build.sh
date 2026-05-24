@@ -23,6 +23,8 @@ llama_acquire_lock || llama_die "无法获取文件锁"
 # --- 退出清理 ------------------------------------------------
 _cleanup_on_exit() {
     local exit_code=$?
+    [[ "${_CLEANUP_DONE:-0}" -eq 1 ]] && return 0
+    _CLEANUP_DONE=1
     if [[ "${INCREMENTAL:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
         llama_warn "清理未完成的构建目录..."
         rm -rf "$BUILD_DIR"
@@ -30,6 +32,12 @@ _cleanup_on_exit() {
     llama_safe_exit "$exit_code"
 }
 llama_setup_trap _cleanup_on_exit
+trap '_cleanup_on_exit' EXIT
+
+# _cleanup_on_exit is registered on both SIGINT/SIGTERM (via llama_setup_trap)
+# and EXIT (via trap above). The EXIT trap ensures cleanup fires on llama_die →
+# exit path (CMake/compile/verify failures). The _CLEANUP_DONE guard flag
+# in the function prevents duplicate cleanup from double-firing.
 
 # --- 帮助信息 ------------------------------------------------
 _show_help() {
@@ -49,13 +57,14 @@ _detect_cuda_lib_dir() {
         return 1
     fi
     local nvcc_dir nvcc_real_path
-    nvcc_real_path=$(readlink -f "$(command -v nvcc)")
+    nvcc_real_path=$(readlink -f "$(command -v nvcc)" 2>/dev/null) || return 1
+    if [[ -z "$nvcc_real_path" ]]; then return 1; fi
     nvcc_dir=$(dirname "$(dirname "$nvcc_real_path")")
     local cuda_lib_dir
     cuda_lib_dir="${nvcc_dir}/targets/$(uname -m)-linux/lib"
     if [[ ! -d "$cuda_lib_dir" ]]; then
-        local cuda_rt
-        cuda_rt=$(find "$nvcc_dir" -maxdepth 6 -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
+        local cuda_rt max_search_depth=6
+        cuda_rt=$(find "$nvcc_dir" -maxdepth "$max_search_depth" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
         if [[ -n "$cuda_rt" ]]; then
             cuda_lib_dir=$(dirname "$(readlink -f "$cuda_rt")")
         fi
@@ -97,6 +106,10 @@ _verify_binary_exists() {
 # 参数: $1=bin_dir, $2=binary (default: llama-cli), $3=grep_pattern, $4=label, $5=not_found_msg
 _verify_linking() {
     local bin_dir="$1"
+    if [[ -z "$bin_dir" ]]; then
+        llama_warn "链接检查跳过：未指定二进制目录"
+        return 0
+    fi
     local binary="${2:-llama-cli}"
     local pattern="$3"
     local label="$4"
@@ -323,7 +336,7 @@ INCREMENTAL=0  # 脚本级变量：trap handler 无法访问 main() 的 local �
         -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
         -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
         -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
-        "${CMAKE_EXTRA_ARGS[@]}"
+        ${CMAKE_EXTRA_ARGS[@]+"${CMAKE_EXTRA_ARGS[@]}"}
     local cmake_exit=$?
 
     if [[ "$cmake_exit" -ne 0 ]]; then
