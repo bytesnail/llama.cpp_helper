@@ -5,7 +5,7 @@
 # 硬件：Intel Xeon E5-2667 v4 (32核) / 251GB RAM
 #       2× RTX 2080 Ti 22GB (NVLink 2链路, sm_75)
 # 软件：CUDA 13.0 / OpenBLAS 0.3.25 / GCC 12.3.0 / Ninja 1.12.1
-# 使用：cd /mnt/hdd/projects/llama.cpp_helper && bash build.sh
+# 使用：cd /path/to/llama.cpp_helper && bash build.sh
 # ============================================================
 
 set -euo pipefail
@@ -15,11 +15,10 @@ source "${SCRIPT_DIR}/common.sh"
 source "${SCRIPT_DIR}/config.sh"
 
 BUILD_DIR="${LLAMA_CPP_SRC}/build"
+readonly BUILD_DIR
 
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || llama_die "无法获取文件锁"
-
-
 
 # --- 退出清理 ------------------------------------------------
 _cleanup_on_exit() {
@@ -49,9 +48,11 @@ _detect_cuda_lib_dir() {
     if ! command -v nvcc &>/dev/null; then
         return 1
     fi
-    local nvcc_dir
-    nvcc_dir=$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")
-    local cuda_lib_dir="${nvcc_dir}/targets/x86_64-linux/lib"
+    local nvcc_dir nvcc_real_path
+    nvcc_real_path=$(readlink -f "$(command -v nvcc)")
+    nvcc_dir=$(dirname "$(dirname "$nvcc_real_path")")
+    local cuda_lib_dir
+    cuda_lib_dir="${nvcc_dir}/targets/$(uname -m)-linux/lib"
     if [[ ! -d "$cuda_lib_dir" ]]; then
         local cuda_rt
         cuda_rt=$(find "$nvcc_dir" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
@@ -108,8 +109,10 @@ _verify_linking() {
         llama_warn "${binary} 不存在，跳过 ${label} 链接检查"
         return 0
     fi
-    if ldd "$bin_path" 2>/dev/null | grep -qiE "$pattern"; then
-        ldd "$bin_path" | grep -iE "$pattern" | while IFS= read -r line; do
+    local ldd_output
+    ldd_output=$(ldd "$bin_path" 2>/dev/null) || true
+    if echo "$ldd_output" | grep -qiE "$pattern"; then
+        echo "$ldd_output" | grep -iE "$pattern" | while IFS= read -r line; do
             llama_detail "$line"
         done
         llama_ok "${label} 链接正常"
@@ -141,7 +144,7 @@ _verify_cuda_devices() {
         return 0
     fi
     local bench_output
-    bench_output=$("${bin_dir}/llama-bench" --help 2>&1 || :)
+    bench_output=$("${bin_dir}/llama-bench" --help 2>&1 || true)
     if echo "$bench_output" | grep -q "found [0-9]* CUDA devices"; then
         echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
             llama_detail "$line"
@@ -178,8 +181,8 @@ _verify_build() {
     local bin_dir="${BUILD_DIR}/bin"
 
     # 检查关键二进制文件
-    for binary in llama-cli llama-server; do
-        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || :
+    for binary in "${REQUIRED_BINARIES[@]}"; do
+        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || true
     done
 
     # 链接检查（非致命）
@@ -201,12 +204,12 @@ _verify_build() {
     return "$errors"
 }
 
-# --- 参数解析 ------------------------------------------------
-
 # --- 主逻辑 --------------------------------------------------
 main() {
     local INCREMENTAL=0
     local JOBS
+    local GCC_PATH GXX_PATH CUDA_LIB_DIR=""
+    local -a CMAKE_EXTRA_ARGS
     while (($# > 0)); do
         case "$1" in
             -i|--incremental)
@@ -231,7 +234,7 @@ main() {
     llama_step "前置检查"
 
     # shellcheck disable=SC2015
-        llama_check_commands \
+    llama_check_commands \
         cmake "cmake" \
         gcc "gcc" \
         g++ "g++" \
@@ -252,7 +255,7 @@ main() {
     llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die "llama.cpp 源码目录不存在"
     llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die "llama.cpp CMakeLists.txt 不存在"
 
-    llama_check_gpu || :
+    llama_check_gpu || true
 
     # --- 磁盘空间检查 --------------------------------------------
     llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die "磁盘空间不足"
@@ -267,17 +270,10 @@ main() {
     llama_detail "C 编译器: $GCC_PATH"
     llama_detail "C++ 编译器: $GXX_PATH"
 
-    # 自动检测 CUDA 库路径（用于 RPATH）
-    # 背景：b8940 起 llama.cpp 将 CUDA 后端拆分为独立的 libggml-cuda.so，
-    # 且 CUDA 依赖声明为 PRIVATE，不会通过 CMake 传播到最终可执行文件。
-    # 当 CUDA 安装在非标准路径（如 Anaconda）时，链接器无法找到 libcudart.so / libcublas.so。
-    # 此处通过 CMAKE_BUILD_RPATH 将 CUDA 库目录加入链接器搜索路径。
-    #
-    # ⚠️ 这是临时方案。如果未来 llama.cpp 在 CMake 中自行处理了 CUDA 库的 RPATH
-    #    （例如将 PRIVATE 改为 PUBLIC，或显式设置 RPATH），则此处不再需要。
-    #    验证方法：更新 llama.cpp 后，删除此处 CUDA_LIB_DIR 检测和 CMAKE_BUILD_RPATH，
-    #    执行完整构建（bash build.sh），若链接阶段无 "libcudart.so.* not found" 错误，
-    #    即说明 llama.cpp 已自行解决此问题，可安全移除。
+    # CUDA RPATH 临时方案（b8940+）：llama.cpp 将 CUDA 依赖声明为 PRIVATE，
+    # 导致非标准路径安装（如 Anaconda）下 libcudart.so 链接失败。
+    # 通过 CMAKE_BUILD_RPATH 注入 CUDA 库路径。
+    # ⚠️ 上游修复后移除：删除此处 + CMAKE_BUILD_RPATH，若链接无错误即可。
     if CUDA_LIB_DIR=$(_detect_cuda_lib_dir); then
         llama_detail "CUDA 库路径: $CUDA_LIB_DIR"
     else
@@ -345,7 +341,6 @@ main() {
 
     llama_ok "编译完成"
 
-
     # --- 步骤 4：验证构建 ----------------------------------------
     llama_step "步骤 4/4：验证构建"
 
@@ -354,7 +349,7 @@ main() {
     if [[ "$verify_exit" -gt 0 ]]; then
         llama_die "构建验证失败，${verify_exit} 个错误"
     fi
-    git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || :
+    git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || llama_warn "无法写入构建标记"
     echo ""
     llama_ok "构建完成！"
     echo ""
