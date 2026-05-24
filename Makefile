@@ -1,21 +1,26 @@
-# Use user-local shellcheck path if available
+# Check for user-local tool paths; fall back to bare names if not found
 SHELLCHECK  := $(shell command -v shellcheck 2>/dev/null || echo shellcheck)
 BATS        := $(shell command -v bats 2>/dev/null || echo bats)
 
 SHELL_SCRIPTS := common.sh config.sh build.sh update.sh run_env.sh
 
-.PHONY: lint check test syntax all help
+# Verify tool availability before running targets that require them
+_check_shellcheck: SHELLCHECK_OK := $(shell command -v shellcheck 2>/dev/null)
+_check_shellcheck:
+	@[ -n "$(SHELLCHECK_OK)" ] || { echo "Error: shellcheck not found. Install: apt install shellcheck"; exit 1; }
 
-help:
-	@echo "Targets: lint, syntax, test, check, all"
+_check_bats: BATS_OK := $(shell command -v bats 2>/dev/null)
+_check_bats:
+	@[ -n "$(BATS_OK)" ] || { echo "Error: bats not found. Install: bats (https://github.com/bats-core/bats-core)"; exit 1; }
 
-lint:
+
+lint: _check_shellcheck
 	$(SHELLCHECK) $(SHELL_SCRIPTS)
 
 syntax:
 	@for f in $(SHELL_SCRIPTS); do bash -n "$$f" && echo "OK: $$f" || { echo "FAIL: $$f"; exit 1; }; done
 
-test:
+test: _check_bats
 	$(BATS) tests/
 
 check: lint syntax test

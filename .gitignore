@@ -1,2 +1,9 @@
 .sisyphus/
 .omo/
+
+*.swp
+*.swo
+*~
+.DS_Store
+*.bak
+*.orig
