@@ -104,6 +104,12 @@ teardown() {
     [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }
 
+@test "llama_get_gpu_count returns a non-negative integer" {
+    run llama_get_gpu_count
+    [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+}
+
 # --- File Locking ---
 @test "llama_acquire_lock succeeds on first call" {
     llama_acquire_lock
@@ -117,7 +123,7 @@ teardown() {
     (
         source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
         LOCK_FILE="${LOCK_FILE}" llama_acquire_lock
-        sleep 5
+        sleep 2  # 减少测试等待时间
         LOCK_FILE="${LOCK_FILE}" llama_release_lock
     ) &
     local bg_pid=$!
@@ -137,12 +143,12 @@ teardown() {
     [ -z "${LOCK_FD:-}" ]
 }
 
-@test "llama_recover_stale_lock recovers a lock held by a dead process" {
+@test "_recover_stale_lock recovers a lock held by a dead process" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     # Create a lock file with a nonexistent PID
     echo "99999" > "${LOCK_FILE}"
     # Call directly (not via run) because LOCK_FD must survive the subshell
-    llama_recover_stale_lock "${LOCK_FILE}"
+    _recover_stale_lock "${LOCK_FILE}"
     local _recover_rc=$?
     [ "$_recover_rc" -eq 0 ]
     [ -n "${LOCK_FD:-}" ]
@@ -200,7 +206,7 @@ teardown() {
     llama_cleanup_trap
     local handler
     handler=$(trap -p SIGINT 2>&1 || true)
-    [[ "$handler" =~ SIGINT ]] || [[ "$handler" == *"trap --"* ]] || [[ "$handler" == "" ]]
+    [[ "$handler" == "" ]]  # 重置后 trap -p SIGINT 应输出空
 }
 
 # --- Exit Helpers ---
@@ -228,7 +234,7 @@ teardown() {
     [ "$status" -eq 1 ]
 }
 
-# --- llma_cd_back ---
+# --- llama_cd_back ---
 @test "llama_cd_back returns 0 when ORIG_DIR is unset" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     unset ORIG_DIR

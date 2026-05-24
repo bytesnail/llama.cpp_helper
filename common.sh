@@ -59,7 +59,7 @@ llama_check_commands() {
         fi
     done
     if (($# > 0)); then
-        llama_warn "llama_check_commands 参数未成对，忽略: $1"
+        llama_warn "依赖参数不完整，已忽略: $*"
     fi
     if ((${#missing[@]} > 0)); then
         llama_err "缺少以下依赖:"
@@ -125,7 +125,7 @@ llama_get_gpu_count() {
 llama_check_gpu() {
     local gpu_count
     gpu_count=$(llama_get_gpu_count)
-    if [[ "$gpu_count" -gt 0 ]]; then
+    if [[ "$gpu_count" =~ ^[0-9]+$ ]] && ((gpu_count > 0)); then
         local line
         nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | while IFS= read -r line; do
             llama_detail "$line"
@@ -195,13 +195,24 @@ llama_activate_conda() {
     source "$conda_sh"
 
     local env_name="${CONDA_ENV_NAME:-base}"
-    local activate_err
-    activate_err=$(conda activate "$env_name" 2>&1) && activate_err=""
-    if [[ -z "$activate_err" ]]; then
-        llama_ok "已激活 conda 环境: ${env_name}"
+    # 直接执行 conda activate（不使用命令替换子 shell，否则环境修改会丢失）
+    local _conda_err_file
+    _conda_err_file=$(mktemp "${TMPDIR:-/tmp}/conda_activate_err.XXXXXX" 2>/dev/null) || _conda_err_file=""
+    if [[ -n "$_conda_err_file" ]]; then
+        if conda activate "$env_name" 2>"$_conda_err_file"; then
+            llama_ok "已激活 conda 环境: ${env_name}"
+        else
+            llama_warn "conda 环境激活失败: ${env_name}"
+            llama_detail "$(cat "$_conda_err_file" 2>/dev/null || true)"
+        fi
+        rm -f "$_conda_err_file"
     else
-        llama_warn "conda 环境激活失败: ${env_name}"
-        llama_detail "$activate_err"
+        # 无法创建临时文件，回退到静默模式（不捕获错误输出）
+        if conda activate "$env_name" 2>/dev/null; then
+            llama_ok "已激活 conda 环境: ${env_name}"
+        else
+            llama_warn "conda 环境激活失败: ${env_name}"
+        fi
     fi
 
     return 0
@@ -210,9 +221,10 @@ llama_activate_conda() {
 # --- 文件锁 --------------------------------------------------
 # 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
 
-# Usage: llama_recover_stale_lock <lock_file>
+# Usage: _recover_stale_lock <lock_file>
 # Attempts to recover a stale lock. Returns 0 on success (LOCK_FD set), 1 on failure.
-llama_recover_stale_lock() {
+# Internal helper - called only by llama_acquire_lock.
+_recover_stale_lock() {
     local lock_file="$1"
     local holder_pid
     holder_pid=$(cat "$lock_file" 2>/dev/null || true)
@@ -265,7 +277,7 @@ llama_acquire_lock() {
             llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
         else
             exec {fd}>&- 2>/dev/null || true
-            llama_recover_stale_lock "$lock_file"
+            _recover_stale_lock "$lock_file"
             return $?
         fi
         exec {fd}>&- 2>/dev/null || true
@@ -362,6 +374,10 @@ llama_is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
 # Checks if the current build is complete and matches the current source commit.
 # Returns 0 = build healthy, 1 = build missing or stale.
 llama_check_build_health() {
+    # 守卫：确保 config.sh 已被 source
+    if [[ -z "${LLAMA_CPP_SRC:-}" ]]; then
+        return 1
+    fi
     local bin_dir="${LLAMA_CPP_SRC}/build/bin"
     if [[ ! -d "$bin_dir" ]]; then
         return 1
@@ -537,6 +553,6 @@ llama_run_silent() {
     set +e
     "$@"
     _ret=$?
-    eval "$_prev_opts"
+    eval "$_prev_opts" 2>/dev/null || true
     return "$_ret"
 }
