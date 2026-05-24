@@ -56,7 +56,7 @@ fi
 # --- 环境变量定义 --------------------------------------------
 # 使用关联数组定义所有要设置的环境变量
 # 格式: [变量名]="值|描述"
-declare -A LLAMA_ENV_VARS=(
+declare -A _LLAMA_RUN_ENV_VARS=(
     ["GGML_CUDA_P2P"]="1|启用 GPU 间 P2P 直传（NVLink）"
     ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
 )
@@ -81,7 +81,7 @@ _show_env_vars() {
     echo "环境变量:"
     # 使用排序确保输出顺序确定性
     for var in $(_sorted_env_var_names); do
-        local info="${LLAMA_ENV_VARS[$var]}"
+        local info="${_LLAMA_RUN_ENV_VARS[$var]}"
         local desc="${info#*|}"
         echo "  ${var}"
         echo "    作用: ${desc}"
@@ -95,7 +95,8 @@ _show_env_vars() {
 }
 
 _sorted_env_var_names() {
-    echo "${!LLAMA_ENV_VARS[@]}" | tr ' ' '\n' | sort
+    echo "${!_LLAMA_RUN_ENV_VARS[@]}" | tr ' ' '
+' | sort
 }
 
 # --- 主函数 --------------------------------------------------
@@ -158,7 +159,7 @@ main() {
     # 设置每个环境变量
     local var info value desc
     for var in $(_sorted_env_var_names); do
-        info="${LLAMA_ENV_VARS[$var]}"
+        info="${_LLAMA_RUN_ENV_VARS[$var]}"
         value="${info%|*}"
         desc="${info#*|}"
 

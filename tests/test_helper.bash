@@ -14,5 +14,8 @@ setup() {
 }
 
 teardown() {
+    if [[ -n "${LOCK_FD:-}" ]]; then
+        exec {LOCK_FD}>&- 2>/dev/null || true
+    fi
     _teardown_tmpdir
 }

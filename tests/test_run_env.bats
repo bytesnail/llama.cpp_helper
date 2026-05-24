@@ -48,3 +48,21 @@ load test_helper
     [ "$status" -eq 0 ]
     [[ "$output" =~ "GGML_CUDA_P2P" ]]
 }
+
+@test "run_env.sh sets CUDA_SCALE_LAUNCH_QUEUES=4x" {
+    run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' && echo \$CUDA_SCALE_LAUNCH_QUEUES"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "4x" ]]
+}
+
+@test "run_env.sh preserves pre-set CUDA_SCALE_LAUNCH_QUEUES" {
+    run bash -c "export CUDA_SCALE_LAUNCH_QUEUES=8x; source '${BATS_TEST_DIRNAME}/../run_env.sh' 2>/dev/null; echo \$CUDA_SCALE_LAUNCH_QUEUES"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "8x" ]]
+}
+
+@test "run_env.sh --status does not set env vars" {
+    run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' --status 2>/dev/null; echo P2P=\${GGML_CUDA_P2P:-unset}"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" =~ "P2P=1" ]]
+}
