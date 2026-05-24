@@ -26,6 +26,7 @@ RELEASE_URL=""
 CURRENT_COMMIT=""
 CURRENT_SHORT=""
 CURRENT_TAG=""
+CURRENT_BRANCH=""
 ORIG_DIR=""
 TARGET_VERSION=""
 RELEASE_SHORT=""
@@ -80,9 +81,13 @@ _rollback() {
     fi
     if [[ "$failed" -eq 0 ]]; then
         llama_ok "已回滚到 ${CURRENT_SHORT}"
-        # 恢复原始分支上下文（回滚到 commit 后切回原分支）
-        if [[ -n "${CURRENT_BRANCH:-}" ]]; then
-            git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_BRANCH" --quiet 2>/dev/null || true
+    fi
+    # Always attempt branch restoration regardless of rollback issues
+    if [[ -n "${CURRENT_BRANCH:-}" ]]; then
+        if git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_BRANCH" --quiet 2>/dev/null; then
+            :  # branch restored successfully
+        else
+            llama_warn "无法恢复到原始分支: ${CURRENT_BRANCH}（当前处于 detached HEAD）"
         fi
     fi
     return "$failed"
@@ -404,7 +409,12 @@ _update_source() {
 
     llama_info "切换到版本 ${RELEASE_TAG}..."
 
-    git checkout "${RELEASE_TAG}" --quiet
+    if ! git checkout "${RELEASE_TAG}" --quiet; then
+        llama_err "切换到版本 ${RELEASE_TAG} 失败"
+        llama_cd_back
+        _rollback
+        llama_die "版本切换失败"
+    fi
 
     ACTUAL_COMMIT=$(git rev-parse HEAD)
     ACTUAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
