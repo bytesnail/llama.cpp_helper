@@ -431,6 +431,7 @@ llama_human_size() {
     if ((bytes >= _LLAMA_BYTES_GIB)); then
         local gb=$((bytes / _LLAMA_BYTES_GIB))
         local frac=$(( (bytes % _LLAMA_BYTES_GIB) * 100 / _LLAMA_BYTES_GIB ))
+        local frac_str
         printf -v frac_str '%02d' "$frac"
         echo "${gb}.${frac_str}GiB"
     elif ((bytes >= _LLAMA_BYTES_MIB)); then
@@ -449,7 +450,10 @@ llama_cd_back() {
     if [[ -z "${ORIG_DIR:-}" ]]; then
         return 0
     fi
-    cd "$ORIG_DIR" >/dev/null 2>&1 || true
+    cd "$ORIG_DIR" >/dev/null 2>&1 || {
+        llama_warn "无法返回原始目录: ${ORIG_DIR}"
+        return 1
+    }
 }
 
 # Usage: llama_die [message] [exit_code]
