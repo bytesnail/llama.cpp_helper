@@ -30,6 +30,7 @@ ORIG_DIR=""
 TARGET_VERSION=""
 RELEASE_SHORT=""
 NEED_SOURCE_UPDATE=1
+SKIP_UPDATE=0  # _resolve_target 设置 —— 无需任何操作时跳过更新
 ACTUAL_COMMIT=""
 ACTUAL_TAG=""
 
@@ -53,6 +54,7 @@ _save_state() {
     CURRENT_COMMIT=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
     CURRENT_SHORT=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD)
     CURRENT_TAG=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
+    CURRENT_BRANCH=$(git -C "$LLAMA_CPP_SRC" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 }
 
 # 回滚到之前的状态
@@ -78,8 +80,27 @@ _rollback() {
     fi
     if [[ "$failed" -eq 0 ]]; then
         llama_ok "已回滚到 ${CURRENT_SHORT}"
+        # 恢复原始分支上下文（回滚到 commit 后切回原分支）
+        if [[ -n "${CURRENT_BRANCH:-}" ]]; then
+            git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_BRANCH" --quiet 2>/dev/null || true
+        fi
     fi
     return "$failed"
+}
+
+# 中断恢复陷阱 — SIGINT/SIGTERM 时恢复到更新前状态
+# llama_safe_exit 130: 130 = 128 + 2 (SIGINT 标准退出码)
+_cleanup_on_interrupt() {
+    llama_warn "更新被中断，正在恢复..."
+    llama_cleanup_trap
+    if [[ -n "${CURRENT_COMMIT:-}" ]]; then
+        git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || true
+        git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
+    fi
+    if [[ -n "${ORIG_DIR:-}" ]]; then
+        llama_cd_back
+    fi
+    llama_safe_exit 130
 }
 
 _cleanup_stale_submodules() {
@@ -105,7 +126,7 @@ _cleanup_stale_submodules() {
                 rm -rf "$git_modules_dir"
                 llama_detail "清理 .git/modules: ${mod_dir}"
             fi
-            ((stale_count++)) || true
+            ((stale_count++)) || true  # || true: ((0)) is exit code 1 under set -e
         fi
     done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
 
@@ -116,12 +137,12 @@ _cleanup_stale_submodules() {
 
 _json_field_gh() {
     local json="$1" field="$2"
-    printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['$field'])"
+    printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$field"
 }
 
 _json_field_curl() {
     local file="$1" field="$2"
-    python3 -c "import json,sys; print(json.load(sys.stdin)['$field'])" < "$file"
+    python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$field" < "$file"
 }
 
 # 打印构建成功的汇总信息
@@ -241,9 +262,9 @@ _check_local_repo() {
         python3 "python3" \
         && llama_ok "基础工具检查通过" || llama_die "基础工具检查失败"
 
-    llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 仓库" || llama_die "llama.cpp 仓库不存在"
-    llama_check_file "${LLAMA_CPP_SRC}/.git/config" "Git 仓库配置" || llama_die "所需文件不存在"
-    llama_check_file "$BUILD_SCRIPT" "构建脚本" || llama_die "所需文件不存在"
+    llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 仓库" || llama_die
+    llama_check_file "${LLAMA_CPP_SRC}/.git/config" "Git 仓库配置" || llama_die
+    llama_check_file "$BUILD_SCRIPT" "构建脚本" || llama_die
 
     llama_info "检查本地仓库状态..."
 
@@ -267,20 +288,7 @@ _check_local_repo() {
 
     _save_state
 
-    # 中断恢复陷阱 — SIGINT/SIGTERM 时恢复到更新前状态
-    # llama_safe_exit 130: 130 = 128 + 2 (SIGINT 标准退出码)
-    _cleanup_on_interrupt() {
-        llama_warn "更新被中断，正在恢复..."
-        llama_cleanup_trap
-        if [[ -n "${CURRENT_COMMIT:-}" ]]; then
-            git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || true
-            git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
-        fi
-        if [[ -n "${ORIG_DIR:-}" ]]; then
-            llama_cd_back
-        fi
-        llama_safe_exit 130
-    }
+    # 设置中断恢复陷阱（函数定义在顶层）
     llama_setup_trap _cleanup_on_interrupt
 
 
@@ -364,21 +372,17 @@ _resolve_target() {
         # 源码无需更新，检查构建是否完整
         if llama_check_build_health; then
             llama_ok "当前构建完整且与源码匹配，无需任何操作！"
-            llama_cd_back
-            llama_safe_exit 0
-        else
-            llama_warn "当前构建缺失或与源码不匹配，需要重新构建"
-            # 跳过源码更新，直接进入构建阶段
-            ACTUAL_COMMIT="$CURRENT_COMMIT"
-            ACTUAL_TAG="$CURRENT_TAG"
-            RELEASE_TAG="${CURRENT_TAG}"
+            SKIP_UPDATE=1
+            return 0
         fi
+        llama_warn "当前构建缺失或与源码不匹配，需要重新构建"
     else
         llama_warn "需要更新: ${CURRENT_SHORT} (${CURRENT_TAG}) → ${RELEASE_TAG}"
     fi
 }
 
 _update_source() {
+    llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
     llama_info "正在从远程仓库拉取最新引用..."
 
     llama_with_network_context "从远程仓库拉取标签" git fetch origin --quiet --tags || {
@@ -387,7 +391,7 @@ _update_source() {
     }
 
     # 尝试 fetch 特定标签（如果是标签的话）
-    if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "."; then
+    if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "refs/tags/${RELEASE_TAG}"; then
         git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
     fi
 
@@ -483,8 +487,13 @@ _build_with_rollback() {
 main() {
     llama_step "llama.cpp 一键更新脚本"
     _parse_args "$@"
+    llama_activate_conda  # 激活 conda 环境（确保 python3/git 等工具可用）
     _check_local_repo
     _resolve_target
+    if [[ "${SKIP_UPDATE:-0}" -eq 1 ]]; then
+        llama_cd_back
+        llama_safe_exit 0
+    fi
     if [[ "${NEED_SOURCE_UPDATE:-1}" -eq 1 ]]; then
         _update_source
     fi

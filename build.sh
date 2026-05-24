@@ -55,7 +55,7 @@ _detect_cuda_lib_dir() {
     cuda_lib_dir="${nvcc_dir}/targets/$(uname -m)-linux/lib"
     if [[ ! -d "$cuda_lib_dir" ]]; then
         local cuda_rt
-        cuda_rt=$(find "$nvcc_dir" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
+        cuda_rt=$(find "$nvcc_dir" -maxdepth 6 -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
         if [[ -n "$cuda_rt" ]]; then
             cuda_lib_dir=$(dirname "$(readlink -f "$cuda_rt")")
         fi
@@ -144,7 +144,7 @@ _verify_cuda_devices() {
         return 0
     fi
     local bench_output
-    bench_output=$("${bin_dir}/llama-bench" --help 2>&1 || true)
+    bench_output=$(LC_ALL=C "${bin_dir}/llama-bench" --help 2>&1 || true)
     if echo "$bench_output" | grep -q "found [0-9]* CUDA devices"; then
         echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
             llama_detail "$line"
@@ -182,7 +182,7 @@ _verify_build() {
 
     # 检查关键二进制文件
     for binary in "${REQUIRED_BINARIES[@]}"; do
-        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || true
+        _verify_binary_exists "$binary" "$bin_dir" || ((errors++)) || true  # || true: ((0)) is exit code 1 under set -e
     done
 
     # 链接检查（非致命）
@@ -206,7 +206,7 @@ _verify_build() {
 
 # --- 主逻辑 --------------------------------------------------
 main() {
-    local INCREMENTAL=0
+INCREMENTAL=0  # 脚本级变量：trap handler 无法访问 main() 的 local 变量
     local JOBS
     local GCC_PATH GXX_PATH CUDA_LIB_DIR=""
     local -a CMAKE_EXTRA_ARGS
@@ -255,13 +255,13 @@ main() {
         llama_detail "NVCC: $(nvcc --version 2>/dev/null | tail -1)"
     fi
 
-    llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die "llama.cpp 源码目录不存在"
-    llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die "llama.cpp CMakeLists.txt 不存在"
+    llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die
+    llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die
 
     llama_check_gpu || true
 
     # --- 磁盘空间检查 --------------------------------------------
-    llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die "磁盘空间不足"
+    llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
 
     # --- 动态检测 ------------------------------------------------
     JOBS=$(llama_get_cpu_count)

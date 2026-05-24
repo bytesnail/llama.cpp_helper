@@ -34,4 +34,7 @@ load test_helper
 @test "update.sh warns about extra arguments" {
     run bash "${BATS_TEST_DIRNAME}/../update.sh" b3631 extra_arg
     [[ "$output" =~ "忽略额外参数" ]]
+    # 脚本在 _check_local_repo 失败后会以非零退出码退出，
+    # 但在此之前已经警告了额外参数 — 这就足以进行测试了
+    # [ "$status" -ne 0 ]
 }
