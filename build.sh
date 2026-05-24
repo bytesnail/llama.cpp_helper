@@ -231,6 +231,9 @@ main() {
     done
 
     # --- 前置检查 ------------------------------------------------
+    # 激活 conda 环境（如果 CUDA 工具链通过 conda 安装）
+    llama_activate_conda
+
     llama_step "前置检查"
 
     # shellcheck disable=SC2015
