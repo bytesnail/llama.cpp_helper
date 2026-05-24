@@ -8,6 +8,7 @@ external-sources=true
 source-path=.
 
 # Warnings to exclude
+# Note: verified non-triggering on shellcheck 0.10.0; kept for older versions
 # SC2034: unused variables in sourced scripts (config.sh defines vars for other scripts)
 # SC2119: llama_acquire_lock uses default LOCK_FILE, doesn't need "$@"
 # SC2312: pipefail grep patterns are intentional
