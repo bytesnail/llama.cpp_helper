@@ -2,7 +2,7 @@
 # ============================================================
 # run_env.sh — 运行时性能优化环境变量
 # 硬件：2× RTX 2080 Ti (NVLink) - 离散 GPU，不建议启用统一内存
-# 使用：source /mnt/hdd/projects/llama.cpp_helper/run_env.sh
+# 使用：source /path/to/llama.cpp_helper/run_env.sh
 # ============================================================
 
 # 防止直接执行
@@ -14,18 +14,27 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+# 防止重复 source
+_LLAMA_RUN_ENV_SOURCED=${_LLAMA_RUN_ENV_SOURCED:-0}
+if [[ "$_LLAMA_RUN_ENV_SOURCED" -eq 1 ]]; then
+    return 0 2>/dev/null || true
+fi
+_LLAMA_RUN_ENV_SOURCED=1
+
 # 本脚本设计为被 source 执行，不启用 set -euo pipefail
 # 因为 source 时退出会影响当前 shell
 
 # 加载 common.sh
-# 保存/恢复颜色变量 — run_env.sh 被 source 执行，必须避免污染父 shell
+# 保存颜色变量 — 必须在 source common.sh 之前执行（common.sh 会覆盖颜色变量）
+# 注意：此处使用内联代码而非 llama_save_colors()，因为该函数在 common.sh 中
+#       且 common.sh 尚未加载。功能等价于 common.sh 中的 llama_save_colors()。
 for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${_v}" '%s' "${!_v-}"
 done
 unset _v
 
 # 引导：查找并 source common.sh（共享辅助函数尚不可用）
-_BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" > /dev/null && pwd)"
+_BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null && pwd)"
 if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
     # shellcheck disable=SC2317
     echo "[ERROR] 未找到 common.sh: ${_BOOT_DIR}/common.sh" >&2
@@ -68,6 +77,8 @@ _show_help() {
 
 _show_env_vars() {
     local var
+    echo ""
+    echo "环境变量:"
     # 使用排序确保输出顺序确定性
     for var in $(_sorted_env_var_names); do
         local info="${LLAMA_ENV_VARS[$var]}"

@@ -2,7 +2,7 @@
 # ============================================================
 # update.sh — llama.cpp 一键更新脚本
 # 功能：查询 GitHub 最新 release → 拉取 → 构建
-# 用法：cd /mnt/hdd/projects/llama.cpp_helper && bash update.sh [tag|commit]
+# 用法：cd /path/to/llama.cpp_helper && bash update.sh [tag|commit]
 # ============================================================
 
 set -euo pipefail
@@ -16,9 +16,6 @@ source "${SCRIPT_DIR}/config.sh"
 # --- 文件锁定 ------------------------------------------------
 llama_acquire_lock || llama_die "无法获取文件锁"
 
-# 网络超时（可通过环境变量覆盖）
-CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"
-CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 BUILD_SCRIPT="${SCRIPT_DIR}/build.sh"
 
 # --- 状态变量 ------------------------------------------------
@@ -30,6 +27,11 @@ CURRENT_COMMIT=""
 CURRENT_SHORT=""
 CURRENT_TAG=""
 ORIG_DIR=""
+TARGET_VERSION=""
+RELEASE_SHORT=""
+NEED_SOURCE_UPDATE=1
+ACTUAL_COMMIT=""
+ACTUAL_TAG=""
 
 # --- 帮助信息 ------------------------------------------------
 _show_help() {
@@ -103,7 +105,7 @@ _cleanup_stale_submodules() {
                 rm -rf "$git_modules_dir"
                 llama_detail "清理 .git/modules: ${mod_dir}"
             fi
-            ((stale_count++)) || :
+            ((stale_count++)) || true
         fi
     done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
 
@@ -173,7 +175,7 @@ _fetch_latest_release_curl() {
 
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local tmp
-    tmp=$(mktemp /tmp/llama_release.XXXXXX.json)
+    tmp=$(mktemp "${TMPDIR:-/tmp}/llama_release.XXXXXX.json")
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" RETURN
 
@@ -184,11 +186,10 @@ _fetch_latest_release_curl() {
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "$api_url") || return 1
 
-
     if [[ "$http_code" != "200" ]]; then
         llama_err "GitHub API 请求失败 (HTTP ${http_code})"
         if [[ -s "$tmp" ]]; then
-            cat "$tmp" >&2 || :
+            cat "$tmp" >&2 || true
         fi
         return 1
     fi
@@ -213,6 +214,12 @@ _parse_args() {
             --version)
                 llama_show_version
                 llama_safe_exit 0
+                ;;
+            --*)
+                llama_die "未知选项: $1"
+                ;;
+            -*)
+                llama_die "未知选项: $1"
                 ;;
             *)
                 TARGET_VERSION="$1"
@@ -253,13 +260,12 @@ _check_local_repo() {
     # 检查子模块中的未提交更改
     if git submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null | grep -q 'DIRTY'; then
         llama_err "子模块中存在未提交的更改，请先处理后再更新:"
-        git submodule foreach 'git status --short' 2>/dev/null || :
+        git submodule foreach 'git status --short' 2>/dev/null || true
         llama_cd_back
         llama_die "子模块中存在未提交的更改，请先处理后再更新"
     fi
 
     _save_state
-    llama_setup_trap _cleanup_on_interrupt
 
     # 中断恢复陷阱 — SIGINT/SIGTERM 时恢复到更新前状态
     # llama_safe_exit 130: 130 = 128 + 2 (SIGINT 标准退出码)
@@ -267,15 +273,18 @@ _check_local_repo() {
         llama_warn "更新被中断，正在恢复..."
         llama_cleanup_trap
         if [[ -n "${CURRENT_COMMIT:-}" ]]; then
-            git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || :
-            git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || :
+            git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_COMMIT" --quiet 2>/dev/null || true
+            git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
         fi
         if [[ -n "${ORIG_DIR:-}" ]]; then
             llama_cd_back
         fi
         llama_safe_exit 130
     }
+    llama_setup_trap _cleanup_on_interrupt
 
+
+    local ACTUAL_REMOTE
     ACTUAL_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
     local normalized_remote="${ACTUAL_REMOTE%.git}"
     local normalized_expected="${REPO_URL%.git}"
@@ -379,7 +388,7 @@ _update_source() {
 
     # 尝试 fetch 特定标签（如果是标签的话）
     if git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" 2>/dev/null | grep -q "."; then
-        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || :
+        git fetch origin --quiet "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
     fi
 
     if ! git rev-parse --verify "${RELEASE_TAG}^{commit}" &>/dev/null; then
@@ -433,17 +442,18 @@ _build_with_rollback() {
 
     llama_release_lock
     llama_run_silent bash "$BUILD_SCRIPT"
-    BUILD_STATUS=$?
+    local BUILD_STATUS=$?
 
     if [[ "$BUILD_STATUS" -ne 0 ]]; then
         _rollback
         llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
         llama_step "回滚后重新构建..."
         llama_run_silent bash "$BUILD_SCRIPT"
-        ROLLBACK_BUILD_STATUS=$?
+        local ROLLBACK_BUILD_STATUS=$?
         if [[ "$ROLLBACK_BUILD_STATUS" -ne 0 ]]; then
             llama_err "回滚后构建也失败"
             llama_detail "当前状态:"
+            local current_head
             current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD 2>/dev/null || echo "未知")
             llama_detail "  当前 HEAD: ${current_head}"
             llama_detail "  原始版本: ${CURRENT_SHORT} (${CURRENT_TAG})"

@@ -18,3 +18,20 @@ load test_helper
     [[ "$output" =~ "标签" ]]
     [[ "$output" =~ "commit" ]]
 }
+
+@test "update.sh rejects unknown flags with error" {
+    run bash "${BATS_TEST_DIRNAME}/../update.sh" --bogus
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "未知" ]]
+}
+
+@test "update.sh rejects single-dash unknown flags with error" {
+    run bash "${BATS_TEST_DIRNAME}/../update.sh" -x
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "未知" ]]
+}
+
+@test "update.sh warns about extra arguments" {
+    run bash "${BATS_TEST_DIRNAME}/../update.sh" b3631 extra_arg
+    [[ "$output" =~ "忽略额外参数" ]]
+}
