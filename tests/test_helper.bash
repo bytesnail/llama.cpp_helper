@@ -1,4 +1,3 @@
-#!/usr/bin/env bats
 
 _setup_tmpdir() {
     export TEST_TMPDIR

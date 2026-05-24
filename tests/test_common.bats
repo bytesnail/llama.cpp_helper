@@ -137,6 +137,19 @@ teardown() {
     [ -z "${LOCK_FD:-}" ]
 }
 
+@test "llama_recover_stale_lock recovers a lock held by a dead process" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    # Create a lock file with a nonexistent PID
+    echo "99999" > "${LOCK_FILE}"
+    # Call directly (not via run) because LOCK_FD must survive the subshell
+    llama_recover_stale_lock "${LOCK_FILE}"
+    local _recover_rc=$?
+    [ "$_recover_rc" -eq 0 ]
+    [ -n "${LOCK_FD:-}" ]
+    # Clean up
+    llama_release_lock
+}
+
 # --- Disk Space ---
 @test "llama_check_disk_space passes for root with default threshold" {
     run llama_check_disk_space "/"
@@ -207,6 +220,32 @@ teardown() {
     "
     [ "$status" -eq 0 ]
 }
+@test "llama_die with empty message exits 1 and outputs only [ERROR] prefix" {
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_die '' 2>&1
+    "
+    [ "$status" -eq 1 ]
+}
+
+# --- llma_cd_back ---
+@test "llama_cd_back returns 0 when ORIG_DIR is unset" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    unset ORIG_DIR
+    run llama_cd_back
+    [ "$status" -eq 0 ]
+}
+
+@test "llama_cd_back changes to ORIG_DIR when set" {
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        ORIG_DIR='/tmp'
+        llama_cd_back
+        pwd
+    "
+    [ "$status" -eq 0 ]
+    [ "$output" = "/tmp" ]
+}
 
 # --- Init/Source/Help Helpers ---
 @test "llama_init_script_dir sets SCRIPT_DIR" {
@@ -253,6 +292,29 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ 1 ]]
 }
+@test "llama_run_silent passes through success" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        llama_run_silent true
+        echo \$?
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ 0 ]]
+}
+
+@test "llama_run_silent preserves exit code 42 under set -e" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        llama_run_silent '(exit 42)'
+        echo \$?
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ 42 ]]
+}
 
 # --- Human-Readable Size ---
 @test "llama_human_size: 0 bytes returns 0B" {
@@ -289,6 +351,12 @@ teardown() {
     [ "$status" -eq 0 ]
     [ "$output" = "1KiB" ]
 }
+@test "llama_human_size: 2048 bytes returns 2KiB" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_human_size 2048
+    [ "$status" -eq 0 ]
+    [ "$output" = "2KiB" ]
+}
 
 @test "llama_human_size: 1048576 bytes returns 1MiB" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
@@ -297,25 +365,25 @@ teardown() {
     [ "$output" = "1MiB" ]
 }
 
-@test "llama_human_size: 1073741824 bytes returns 1.0GiB" {
+@test "llama_human_size: 1073741824 bytes returns 1.00GiB" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1073741824
     [ "$status" -eq 0 ]
-    [ "$output" = "1.0GiB" ]
+    [ "$output" = "1.00GiB" ]
 }
 
-@test "llama_human_size: 1610612736 bytes returns 1.5GiB" {
+@test "llama_human_size: 1610612736 bytes returns 1.50GiB" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1610612736
     [ "$status" -eq 0 ]
-    [ "$output" = "1.5GiB" ]
+    [ "$output" = "1.50GiB" ]
 }
 
-@test "llama_human_size: 2147483648 bytes returns 2.0GiB" {
+@test "llama_human_size: 2147483648 bytes returns 2.00GiB" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 2147483648
     [ "$status" -eq 0 ]
-    [ "$output" = "2.0GiB" ]
+    [ "$output" = "2.00GiB" ]
 }
 
 # --- Commit SHA Validation ---
@@ -364,15 +432,6 @@ teardown() {
     [[ "$output" =~ 0 ]]
 }
 
-# --- Empty llama_die ---
-@test "llama_die with empty message exits 1 and outputs only [ERROR] prefix" {
-    run bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
-        llama_die '' 2>&1
-    "
-    [ "$status" -eq 1 ]
-}
-
 # --- Build Health ---
 @test "llama_check_build_health returns 1 when build dir does not exist" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
@@ -380,30 +439,6 @@ teardown() {
     run llama_check_build_health
     [ "$status" -eq 1 ]
 }
-@test "llama_run_silent passes through success" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    run bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
-        set -e
-        llama_run_silent true
-        echo \$?
-    "
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ 0 ]]
-}
-
-@test "llama_run_silent preserves exit code 42 under set -e" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    run bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
-        set -e
-        llama_run_silent '(exit 42)'
-        echo \$?
-    "
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ 42 ]]
-}
-
 @test "llama_check_build_health returns 1 when binaries are missing" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     LLAMA_CPP_SRC="${TEST_TMPDIR}/fake_llama"
@@ -433,11 +468,22 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "llama_human_size: 2048 bytes returns 2KiB" {
+@test "llama_check_build_health returns 1 when stamp does not match HEAD" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    run llama_human_size 2048
-    [ "$status" -eq 0 ]
-    [ "$output" = "2KiB" ]
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/stale_llama"
+    REQUIRED_BINARIES=("llama-cli" "llama-server")
+    mkdir -p "${LLAMA_CPP_SRC}/build/bin"
+    touch "${LLAMA_CPP_SRC}/build/bin/llama-cli"
+    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-cli"
+    touch "${LLAMA_CPP_SRC}/build/bin/llama-server"
+    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-server"
+    git -C "${TEST_TMPDIR}/stale_llama" init --quiet 2>/dev/null
+    git -C "${TEST_TMPDIR}/stale_llama" add -A 2>/dev/null
+    git -C "${TEST_TMPDIR}/stale_llama" commit -m "init" --quiet 2>/dev/null
+    mkdir -p "${LLAMA_CPP_SRC}/build"
+    echo "0000000000000000000000000000000000000000" > "${LLAMA_CPP_SRC}/build/.build-stamp"
+    run llama_check_build_health
+    [ "$status" -eq 1 ]
 }
 
 # --- conda Activation ---
@@ -506,4 +552,23 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ "conda 环境激活失败" ]]
     [[ "$output" =~ "环境不存在" ]]
+}
+
+# --- Color Save/Restore ---
+@test "llama_save_colors and llama_restore_colors preserve values" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    RED="test_red"
+    GREEN="test_green"
+    CYAN="test_cyan"
+    llama_save_colors
+    RED="modified"
+    GREEN="modified"
+    CYAN="modified"
+    llama_restore_colors
+    [ "$RED" = "test_red" ]
+    [ "$GREEN" = "test_green" ]
+    [ "$CYAN" = "test_cyan" ]
+    # Verify saved temp vars are cleaned up after restore
+    [ -z "${_LLAMA_SAVED_RED+x}" ] || false
+    [ -z "${_LLAMA_SAVED_GREEN+x}" ] || false
 }

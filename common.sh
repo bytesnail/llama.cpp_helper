@@ -109,7 +109,7 @@ llama_get_cpu_count() {
 # --- GPU 检测 ------------------------------------------------
 # Usage: llama_get_gpu_count
 # Returns the number of NVIDIA GPUs detected via nvidia-smi.
-# Output: GPU count on stdout (0 if none), exit code 0 if detected, 1 otherwise.
+# Output: GPU count on stdout (0 if none), exit code 0 if nvidia-smi found, 1 if nvidia-smi not installed.
 llama_get_gpu_count() {
     if command -v nvidia-smi &>/dev/null; then
         local count
@@ -215,20 +215,18 @@ llama_activate_conda() {
 llama_recover_stale_lock() {
     local lock_file="$1"
     local holder_pid
-    holder_pid=$(cat "$lock_file" 2>/dev/null || :)
+    holder_pid=$(cat "$lock_file" 2>/dev/null || true)
 
     llama_warn "检测到残留锁（原持有者 PID ${holder_pid:-未知} 已不存在）"
     llama_detail "尝试自动清理残留锁..."
-
-    rm -f "$lock_file"
     local fd
     exec {fd}>>"$lock_file"
 
     if ! flock -n "$fd"; then
         llama_err "自动清理失败，锁仍然被占用"
         llama_detail "请手动检查是否有其他进程在使用该锁文件"
-        llama_detail "可尝试: rm -f ${lock_file}"
-        exec {fd}>&- 2>/dev/null || :
+        llama_detail "请在确认没有其他进程占用锁文件后重试"
+        exec {fd}>&- 2>/dev/null || true
         return 1
     fi
 
@@ -251,7 +249,7 @@ llama_acquire_lock() {
     local lock_dir
     lock_dir=$(dirname "$lock_file")
     if [[ ! -d "$lock_dir" ]]; then
-        mkdir -p "$lock_dir" 2>/dev/null || :
+        mkdir -p "$lock_dir" 2>/dev/null || true
     fi
 
     local fd
@@ -259,17 +257,18 @@ llama_acquire_lock() {
 
     if ! flock -n "$fd"; then
         # 锁被占用 — 仅在 flock 失败后从文件读取 PID 用于诊断
-        holder_pid=$(cat "$lock_file" 2>/dev/null || :)
+        local holder_pid
+        holder_pid=$(cat "$lock_file" 2>/dev/null || true)
         local holder_cmd
         if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
             holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
             llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
         else
-            exec {fd}>&- 2>/dev/null || :
+            exec {fd}>&- 2>/dev/null || true
             llama_recover_stale_lock "$lock_file"
             return $?
         fi
-        exec {fd}>&- 2>/dev/null || :
+        exec {fd}>&- 2>/dev/null || true
         return 1
     fi
     : > "$lock_file"
@@ -282,10 +281,10 @@ llama_acquire_lock() {
 # Closes the lock file descriptor
 llama_release_lock() {
     if [[ -n "${LOCK_FD:-}" ]]; then
-        exec {LOCK_FD}>&- 2>/dev/null || :
+        exec {LOCK_FD}>&- 2>/dev/null || true
         unset LOCK_FD
     fi
-    # 锁文件不会被删除 — flock 基于_inode_而非文件名工作。
+    # 锁文件不会被删除 — flock 基于 inode 而非文件名工作。
     # 如果在另一个进程等待时删除，会导致等待者锁定一个已删除的 inode。
 }
 
@@ -295,27 +294,27 @@ llama_release_lock() {
 llama_check_disk_space() {
     local path="$1"
     local min_gb="${2:-${MIN_FREE_DISK_GB:-10}}"
-    
+
     if [[ ! -d "$path" ]]; then
         llama_warn "无法检查磁盘空间：路径不存在 $path"
         return 0  # 不阻塞，仅警告
     fi
-    
+
     local available_kb
     available_kb=$(df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}')
     if [[ -z "$available_kb" ]]; then
         llama_warn "无法获取磁盘空间信息"
         return 0
     fi
-    
+
     local available_gb=$((available_kb / 1024 / 1024))
     llama_detail "磁盘可用空间: ${available_gb}GB (要求: ${min_gb}GB)"
-    
+
     if ((available_gb < min_gb)); then
         llama_err "磁盘空间不足: 可用 ${available_gb}GB, 需要至少 ${min_gb}GB"
         return 1
     fi
-    
+
     llama_ok "磁盘空间检查通过"
     return 0
 }
@@ -328,7 +327,7 @@ llama_setup_trap() {
     if [[ -z "$cleanup_cmd" ]]; then
         return 1
     fi
-    # shellcheck disable=SC2064
+    # shellcheck disable=SC2064  # Intentional: expand $cleanup_cmd at definition time, not signal time
     trap "$cleanup_cmd" SIGINT SIGTERM
 }
 
@@ -415,8 +414,9 @@ llama_human_size() {
     local bytes=$1
     if ((bytes >= _LLAMA_BYTES_GIB)); then
         local gb=$((bytes / _LLAMA_BYTES_GIB))
-        local frac=$(( (bytes % _LLAMA_BYTES_GIB) * 10 / _LLAMA_BYTES_GIB ))
-        echo "${gb}.${frac}GiB"
+        local frac=$(( (bytes % _LLAMA_BYTES_GIB) * 100 / _LLAMA_BYTES_GIB ))
+        printf -v frac_str '%02d' "$frac"
+        echo "${gb}.${frac_str}GiB"
     elif ((bytes >= _LLAMA_BYTES_MIB)); then
         echo "$((bytes / _LLAMA_BYTES_MIB))MiB"
     elif ((bytes >= _LLAMA_BYTES_KIB)); then
@@ -430,7 +430,10 @@ llama_human_size() {
 # Usage: llama_cd_back
 # Returns to ORIG_DIR safely. Designed for update.sh error paths.
 llama_cd_back() {
-    cd "${ORIG_DIR:-}" >/dev/null 2>&1 || :
+    if [[ -z "${ORIG_DIR:-}" ]]; then
+        return 0
+    fi
+    cd "$ORIG_DIR" >/dev/null 2>&1 || true
 }
 
 # Usage: llama_die [message] [exit_code]
@@ -467,9 +470,8 @@ llama_init_script_dir() {
     export SCRIPT_DIR
 }
 
-
 # Note: Help text labels (用法/描述/选项/示例) are intentionally in Chinese
-# for this project's target audience. See config.sh for language policy.
+# for this project's target audience. See common.sh for language policy.
 
 llama_show_help() {
     local script_name="$1"
@@ -512,7 +514,7 @@ llama_restore_colors() {
         if [[ -n "${!_saved_var+isset}" ]]; then
             printf -v "$_cvar" '%s' "${!_saved_var}"
         else
-            unset "$_cvar" 2>/dev/null || :
+            unset "$_cvar" 2>/dev/null || true
         fi
         unset "$_saved_var"
     done
@@ -529,8 +531,12 @@ llama_print_run_examples() {
 
 # Usage: llama_run_silent <command> [args...]
 llama_run_silent() {
+    local _ret
+    local _prev_opts
+    _prev_opts=$(set +o)
     set +e
     "$@"
-    local ret=$?
-    return "$ret"
+    _ret=$?
+    eval "$_prev_opts"
+    return "$_ret"
 }
