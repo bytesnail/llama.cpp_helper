@@ -87,7 +87,9 @@ _rollback() {
     if [[ "$failed" -eq 0 ]]; then
         llama_ok "已回滚到 ${CURRENT_SHORT}"
     fi
-    # Always attempt branch restoration regardless of rollback issues
+    # Branch restoration is independent of checkout/submodule success: even if
+    # rollback partially failed, restoring the original branch name helps the
+    # user recover manually (detached HEAD is harder to reason about).
     if [[ -n "${CURRENT_BRANCH:-}" ]]; then
         if git -C "$LLAMA_CPP_SRC" checkout "$CURRENT_BRANCH" --quiet 2>/dev/null; then
             :  # branch restored successfully
@@ -523,4 +525,4 @@ main() {
 
 main "$@"
 _main_rc=$?
-llama_return_or_exit ${_main_rc:-0}
+llama_return_or_exit "${_main_rc:-0}"

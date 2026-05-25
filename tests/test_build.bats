@@ -65,3 +65,53 @@ load test_helper
     [ "$status" -eq 1 ]
     [ -z "$output" ]
 }
+
+
+@test "_detect_cuda_lib_dir returns correct path when nvcc is in standard CUDA layout" {
+    source "${BATS_TEST_DIRNAME}/../common.sh"
+    # shellcheck source=/dev/null
+    source "${BATS_TEST_DIRNAME}/../config.sh"
+    eval "$(sed -n '/^_detect_cuda_lib_dir()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+
+    # Create fake CUDA layout
+    local fake_cuda="${TEST_TMPDIR}/fake_cuda"
+    local nvcc_bin="${fake_cuda}/bin"
+    mkdir -p "$nvcc_bin/../lib64"
+    echo '#!/bin/bash' > "${nvcc_bin}/nvcc"
+    chmod +x "${nvcc_bin}/nvcc"
+    # Create a real .so as a marker
+    touch "${nvcc_bin}/../lib64/libcudart.so"
+    mkdir -p "${nvcc_bin}/../targets/x86_64-linux/lib"
+    touch "${nvcc_bin}/../targets/x86_64-linux/lib/libcudart.so"
+
+    local _saved_path="$PATH"
+    PATH="${nvcc_bin}:$PATH"
+    run _detect_cuda_lib_dir
+    PATH="$_saved_path"
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+}
+
+@test "_verify_binary_exists returns 1 and warns when binary is missing" {
+    source "${BATS_TEST_DIRNAME}/../common.sh"
+    # shellcheck source=/dev/null
+    source "${BATS_TEST_DIRNAME}/../config.sh"
+    eval "$(sed -n '/^_verify_binary_exists()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+
+    local empty_dir="${TEST_TMPDIR}/empty_bin"
+    mkdir -p "$empty_dir"
+    run _verify_binary_exists "llama-cli" "$empty_dir"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "二进制文件未生成" ]]
+}
+
+@test "_verify_linking returns 0 when binary does not exist at given path" {
+    source "${BATS_TEST_DIRNAME}/../common.sh"
+    # shellcheck source=/dev/null
+    source "${BATS_TEST_DIRNAME}/../config.sh"
+    eval "$(sed -n '/^_verify_linking()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+
+    run _verify_linking "/nonexistent" "llama-cli" "libcudart" "CUDA" "not found"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "不存在" || "$output" =~ "跳过" ]]
+}

@@ -197,4 +197,4 @@ _main_rc=$?
 
 llama_restore_colors
 
-llama_return_or_exit ${_main_rc:-0}
+llama_return_or_exit "${_main_rc:-0}"

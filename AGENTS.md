@@ -1,12 +1,12 @@
 # PROJECT KNOWLEDGE BASE
 
-**生成时间：** 2026-05-24
-**提交：** 2f4f1b5
+**生成时间：** 2026-05-25
+**提交：** 4ad7d8a
 **分支：** main
 
 ## 概述
 
-llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~1732 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 104 项测试。
+llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1735 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 119 项测试。
 
 用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。本文档面向 AI 代理和开发者。
 
@@ -21,8 +21,8 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
 | 工具层 | `common.sh` | 566 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 380/526/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
-| 测试层 | `tests/` | 912 | 每个源文件对应一个 `test_*.bats` |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 381/528/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
+| 测试层 | `tests/` | 1113 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
 ## 何处查找
 
@@ -35,7 +35,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~
 | 修改测试 | `tests/test_<name>.bats` | 每脚本对应一个文件 |
 | 测试辅助函数 | `tests/test_helper.bash` | setup/teardown + 共享 fixture |
 | ShellCheck 规则调整 | `.shellcheckrc` | 每条 disable 有注释说明原因 |
-- **ShellCheck**：`.shellcheckrc` 禁用规则（SC2034/SC2119/SC2312/SC2317）经验证在 0.10.0 版本未触发，保留以供旧版本兼容
+- **ShellCheck**：`.shellcheckrc` 禁用规则 (SC2034/SC2119/SC2312/SC2317) 除 SC2312 外均在 0.10.0 触发，均为已知误报，保留以供旧版本兼容
 
 ## 命名约定
 
@@ -101,7 +101,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（~
 
 ## 注意事项
 
-- **临时方案**：`build.sh` L291-341 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
+- **临时方案**：`build.sh` L289-302 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
 - **测试未覆盖端到端构建**：`build.sh` 和 `update.sh` 的测试只覆盖 CLI 接口（`--help`, `--version`, 参数解析），实际构建/更新行为不在此项目的测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行

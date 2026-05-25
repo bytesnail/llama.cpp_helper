@@ -620,3 +620,53 @@ teardown() {
     # $'\033' is the ESC character (ANSI escape start)
     [[ "$output" != *$'\033'* ]]
 }
+
+
+@test "llama_check_disk_space returns 1 when insufficient space" {
+    local fake_bin="${TEST_TMPDIR}/fake_bin"
+    mkdir -p "$fake_bin"
+    cat > "${fake_bin}/df" <<'EOF'
+#!/bin/bash
+echo "Filesystem     1K-blocks    Used Available Use% Mounted on"
+echo "/dev/sda1        1000000   950000     10000  99% /"
+EOF
+    chmod +x "${fake_bin}/df"
+    local _saved_path="$PATH"
+    PATH="${fake_bin}:$PATH"
+    run llama_check_disk_space "${TEST_TMPDIR}" 10
+    PATH="$_saved_path"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "磁盘空间不足" ]]
+}
+
+@test "llama_setup_trap returns 1 when command is empty" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_setup_trap ""
+    [ "$status" -eq 1 ]
+}
+
+@test "llama_get_gpu_count returns 1 when nvidia-smi not available" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    local _saved_path="$PATH"
+    PATH="/nonexistent"
+    run llama_get_gpu_count
+    PATH="$_saved_path"
+    [ "$status" -eq 1 ]
+    [ "$output" = "0" ]
+}
+
+@test "llama_check_build_health returns 1 when LLAMA_CPP_SRC unset" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    unset LLAMA_CPP_SRC
+    run llama_check_build_health
+    [ "$status" -eq 1 ]
+}
+
+@test "llama_print_run_examples outputs expected content" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    SCRIPT_DIR="/fake/script/dir" run llama_print_run_examples "/fake/bin"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "run_env.sh" ]]
+    [[ "$output" =~ "llama-cli" ]]
+    [[ "$output" =~ "llama-server" ]]
+}

@@ -118,3 +118,74 @@ load test_helper
     # No stale entries means no cleanup output message
     [[ "$output" != *"清理旧子模块"* ]]
 }
+
+
+@test "_cleanup_stale_submodules removes stale submodule with gitdir ref" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+    eval "$(sed -n '/^_cleanup_stale_submodules()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+
+    local fake_repo="${TEST_TMPDIR}/stale_repo"
+    mkdir -p "$fake_repo"
+    git -C "$fake_repo" init -q
+    git -C "$fake_repo" commit --allow-empty -q -m "init"
+
+    # Create a stale .git file (gitdir ref pattern) in a subdirectory
+    mkdir -p "${fake_repo}/old_sub"
+    echo 'gitdir: ../../../.git/modules/old_sub' > "${fake_repo}/old_sub/.git"
+
+    # Also create corresponding .git/modules/ entry
+    mkdir -p "${fake_repo}/.git/modules/old_sub"
+    touch "${fake_repo}/.git/modules/old_sub/config"
+
+    git -C "$fake_repo" add old_sub/.git 2>/dev/null || true
+
+    LLAMA_CPP_SRC="$fake_repo" run _cleanup_stale_submodules
+    [ "$status" -eq 0 ]
+    # Verify stale module was cleaned up
+    [[ "$output" =~ "清理旧子模块" ]]
+    [[ ! -d "${fake_repo}/old_sub" ]]
+    [[ ! -d "${fake_repo}/.git/modules/old_sub" ]]
+}
+
+@test "_json_field_gh extracts field from valid JSON" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+    eval "$(sed -n '/^_json_field_gh()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+
+    local test_json='{"tagName":"b4000","targetCommitish":"abc1234567890"}'
+    run _json_field_gh "$test_json" "tagName"
+    [ "$status" -eq 0 ]
+    [ "$output" = "b4000" ]
+}
+
+@test "_save_state captures empty branch when detached HEAD" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+
+    local fake_repo="${TEST_TMPDIR}/detached_repo"
+    mkdir -p "$fake_repo"
+    git -C "$fake_repo" init -q
+    git -C "$fake_repo" commit --allow-empty -q -m "init"
+    # Checkout a detached HEAD
+    local commit_sha
+    commit_sha=$(git -C "$fake_repo" rev-parse HEAD)
+    git -C "$fake_repo" checkout -q "$commit_sha" 2>/dev/null
+
+    eval "$(sed -n '/^_save_state()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+    LLAMA_CPP_SRC="$fake_repo"
+    _save_state
+    [ -n "$CURRENT_COMMIT" ]
+    [ -z "$CURRENT_BRANCH" ]
+}
+
+@test "_print_success_summary with source_updated=0 shows rebuild message" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+    eval "$(sed -n '/^_print_success_summary()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+    llama_init_script_dir
+
+    run _print_success_summary 0 "abc1234" "b4000" ""
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "重新构建完成" || "$output" =~ "构建完成" ]]
+}
