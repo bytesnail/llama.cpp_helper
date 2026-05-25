@@ -11,6 +11,9 @@ setup() {
 }
 
 teardown() {
+    if [[ -n "${LOCK_FD:-}" ]]; then
+        exec {LOCK_FD}>&- 2>/dev/null || true
+    fi
     _teardown_tmpdir
 }
 
@@ -682,4 +685,21 @@ EOF
     [[ "$output" =~ "run_env.sh" ]]
     [[ "$output" =~ "llama-cli" ]]
     [[ "$output" =~ "llama-server" ]]
+}
+
+@test "llama_show_help includes examples when provided" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run llama_show_help "test.sh" "desc" "" "  example command"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "示例:" ]]
+    [[ "$output" =~ "example command" ]]
+}
+
+@test "llama_acquire_lock succeeds with explicit lock_file argument" {
+    local custom_lock="${TEST_TMPDIR}/custom.lock"
+    llama_acquire_lock "$custom_lock"
+    local rc=$?
+    [ "$rc" -eq 0 ]
+    [ -n "${LOCK_FD:-}" ]
+    llama_release_lock
 }

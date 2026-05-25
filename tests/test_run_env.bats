@@ -66,3 +66,15 @@ load test_helper
     [ "$status" -eq 0 ]
     [[ ! "$output" =~ "P2P=1" ]]
 }
+
+@test "run_env.sh rejects unknown flags with error" {
+    run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' --bogus"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "未知" ]]
+}
+
+@test "run_env.sh duplicate source guard prevents re-sourcing" {
+    run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' 2>/dev/null && source '${BATS_TEST_DIRNAME}/../run_env.sh' 2>/dev/null && echo SOURCED_TWICE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"SOURCED_TWICE"* ]]
+}

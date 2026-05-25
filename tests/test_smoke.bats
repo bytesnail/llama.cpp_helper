@@ -45,3 +45,9 @@ load test_helper
     "
     [ "$status" -eq 0 ]
 }
+
+@test "config.sh rejects direct execution" {
+    run bash "${BATS_TEST_DIRNAME}/../config.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "source" ]]
+}
