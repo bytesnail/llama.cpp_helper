@@ -8,17 +8,24 @@
 # Usage: cd /path/to/llama.cpp_helper && bash build.sh
 # ============================================================
 
-set -euo pipefail
+# Enable strict mode only when executing normally (not when sourced for test extraction)
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    set -euo pipefail
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
 
-BUILD_DIR="${LLAMA_CPP_SRC}/build"
-readonly BUILD_DIR
-
 # --- 文件锁定 ------------------------------------------------
-llama_acquire_lock || llama_die "无法获取文件锁"
+# Skip setup code when sourced for test extraction
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    BUILD_DIR="${LLAMA_CPP_SRC}/build"
+    readonly BUILD_DIR
+
+    llama_acquire_lock || llama_die "无法获取文件锁"
+fi
 
 # --- 退出清理 ------------------------------------------------
 _cleanup_on_exit() {
@@ -31,12 +38,13 @@ _cleanup_on_exit() {
     fi
     llama_safe_exit "$exit_code"
 }
-llama_setup_trap _cleanup_on_exit
-trap '_cleanup_on_exit' EXIT
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    llama_setup_trap _cleanup_on_exit
+    trap '_cleanup_on_exit' EXIT
+fi
 
 # EXIT trap: ensures cleanup on llama_die→exit paths; _CLEANUP_DONE guard prevents
 # double-fire when SIGINT/SIGTERM (L34) and EXIT both trigger.
-
 # --- 帮助信息 ------------------------------------------------
 _show_help() {
     llama_show_help \
@@ -210,10 +218,8 @@ _verify_build() {
     fi
 
     # Runtime verification (non-fatal)
-    local _vr_rc=0
-    _verify_cuda_devices "$bin_dir" || _vr_rc=$?
-    _verify_openblas_runtime "$bin_dir" "$_verify_binary" || _vr_rc=$?
-
+    _verify_cuda_devices "$bin_dir" || true
+    _verify_openblas_runtime "$bin_dir" "$_verify_binary" || true
     return "$errors"
 }
 
@@ -376,6 +382,8 @@ incremental=0  # Script-level variable: trap handler cannot access main() locals
     return 0
 }
 
-main "$@"
-_main_rc=$?
-llama_return_or_exit "$_main_rc"
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    main "$@"
+    _main_rc=$?
+    llama_return_or_exit "$_main_rc"
+fi

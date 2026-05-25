@@ -313,7 +313,7 @@ llama_check_disk_space() {
     fi
 
     local available_kb
-    available_kb=$(df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}')
+    available_kb=$(LC_ALL=C df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}')
     if [[ -z "$available_kb" ]]; then
         llama_warn "无法获取磁盘空间信息"
         return 0

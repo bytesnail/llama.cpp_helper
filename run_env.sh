@@ -95,8 +95,7 @@ _show_env_vars() {
 }
 
 _sorted_env_var_names() {
-    echo "${!_LLAMA_RUN_ENV_VARS[@]}" | tr ' ' '
-' | sort
+    printf '%s\n' "${!_LLAMA_RUN_ENV_VARS[@]}" | sort
 }
 
 # --- 主函数 --------------------------------------------------
