@@ -20,6 +20,8 @@
   - [run_env.sh — 运行时环境](#run_envsh--运行时环境)
 - [配置](#配置)
   - [构建配置](#构建配置)
+  - [conda 配置](#conda-配置)
+  - [网络超时配置](#网络超时配置)
   - [运行时环境变量](#运行时环境变量)
 - [故障排除](#故障排除)
 - [开发](#开发)
@@ -134,12 +136,7 @@ run_env.sh  ──source──> common.sh
             ──source──> config.sh
 ```
 
-| 层 | 文件 | LOC | 职责 |
-|----|------|-----|------|
-| 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。通过 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 566 | 共享函数库：日志、锁、信号、磁盘、GPU 检测、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 381/528/200 | 各自独立的业务逻辑，均以 `main "$@"` 结尾 |
-| 测试层 | `tests/` | 1126 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查（共 120 项） |
+> 模块分层详见 [AGENTS.md](AGENTS.md#模块分层)。
 
 > `config.sh` 和 `common.sh` 由入口脚本 source，不可直接执行。`run_env.sh` 仅能通过 `source` 使用。
 
@@ -405,10 +402,10 @@ bats tests/test_common.bats
 
 **测试依赖：** `bats-core` 和 `shellcheck`。
 
-> 详细架构、编码规范、模块分层、命名约定、日志规范等信息请参见 [AGENTS.md](AGENTS.md)。
+> 架构、编码规范、命名约定、日志规范等详见 [AGENTS.md](AGENTS.md)。
 
 ---
 
 ## 许可证
 
-与 llama.cpp 相同（MIT）。
+[MIT](LICENSE)（Copyright (c) 2024-2026 llama.cpp_helper contributors）
