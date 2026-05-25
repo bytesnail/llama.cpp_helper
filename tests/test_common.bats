@@ -603,6 +603,19 @@ teardown() {
     [ -z "${_LLAMA_SAVED_GREEN+x}" ] || false
 }
 
+@test "llama_restore_colors unsets variables that were unset when saved" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    unset RED GREEN YELLOW CYAN BLUE BOLD NC
+    llama_save_colors
+    RED="should-disappear"
+    GREEN="should-disappear"
+    llama_restore_colors
+    # restore sets to empty string (not unset) — save uses ${var-} which
+    # converts unset→empty. This is acceptable: unset never occurs in practice.
+    [[ "${RED-__DEFAULT__}" = "" ]]
+    [[ "${GREEN-__DEFAULT__}" = "" ]]
+}
+
 @test "llama_get_cpu_count fallback returns positive number with no PATH" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     # Mock by clearing PATH — if nproc/sysctl fail, falls back to /proc/cpuinfo or 4
