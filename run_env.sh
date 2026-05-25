@@ -34,7 +34,7 @@ done
 unset _v
 
 # 引导：查找并 source common.sh（共享辅助函数尚不可用）
-_BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null && pwd)"
+_BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
     # shellcheck disable=SC2317
     echo "[ERROR] 未找到 common.sh: ${_BOOT_DIR}/common.sh" >&2
@@ -197,4 +197,4 @@ _main_rc=$?
 
 llama_restore_colors
 
-llama_return_or_exit "${_main_rc:-0}"
+llama_return_or_exit "$_main_rc"

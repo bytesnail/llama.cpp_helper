@@ -525,4 +525,4 @@ main() {
 
 main "$@"
 _main_rc=$?
-llama_return_or_exit "${_main_rc:-0}"
+llama_return_or_exit "$_main_rc"
