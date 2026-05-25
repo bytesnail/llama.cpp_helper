@@ -181,7 +181,7 @@ bash update.sh b8941   # 更新到指定标签
 1. 前置检查（工具、仓库、未提交更改）
 2. 查询目标版本（GitHub API，优先 `gh`）
 3. 版本对比（已是最新则检查构建完整性，无需操作则自动跳过）
-4. 拉取 → checkout → 同步子模块 → 清理旧子模块残留
+4. 拉取 → checkout → 清理旧子模块残留 → 同步子模块
 5. 调用 `build.sh` 构建
 6. 构建失败 → 自动回滚 + 回滚后重新构建
 
@@ -191,6 +191,7 @@ bash update.sh b8941   # 更新到指定标签
 
 ```bash
 source run_env.sh           # 加载环境变量
+source run_env.sh -s         # 查看环境变量状态 + GPU 信息（--status 短选项）
 source run_env.sh --status  # 查看环境变量状态 + GPU 信息（名称、显存、温度、利用率）
 ```
 
@@ -238,7 +239,7 @@ LLAMA_CPP_SRC="/your/path/to/llama.cpp" bash build.sh
 
 ### conda 配置
 
-以下变量控制 `run_env.sh` 的 conda 自动激活行为。可通过环境变量覆盖。
+以下变量控制所有脚本的 conda 自动激活行为。可通过环境变量覆盖。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -392,7 +393,7 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（5 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（120 项）
+make test       # bats-core 测试套件（126 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 
