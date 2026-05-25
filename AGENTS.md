@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**生成时间：** 2026-05-25
-**提交：** 4ad7d8a
+**生成时间：** 2026-05-26
+**提交：** 4ad7d8a（审计前基准；变更待提交）
 **分支：** main
 
 ## 概述
@@ -49,6 +49,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | Source 守卫 | `_LLAMA_<NAME>_SOURCED` | `_LLAMA_COMMON_SOURCED` |
 | 脚本文件 | `lowercase.sh` | `build.sh`, `common.sh` |
 
+`LOCK_FD` 是唯一的跨模块可变状态例外：由 `common.sh` 函数设置和读取，多处访问（含各脚本和测试 teardown），保留 `UPPER_SNAKE_CASE` 以突出其跨模块可见性。
 ## 日志规范
 
 6 级彩色日志（定义于 `common.sh`），仅在终端时着色（`[[ -t 1 ]]` 检测）：
@@ -62,7 +63,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | `llama_step` | `=== text ===` | 粗体 | stdout |
 | `llama_detail` | `  →` | 蓝色 | stdout |
 
-**关键约束：** 用户可见消息（日志、错误、帮助文本、命令行输出）必须用中文。代码注释和 Usage 行用英文。
+**关键约束：** 用户可见消息（日志、错误、帮助文本、命令行输出）必须用中文。代码注释和 `# Usage:` 行用英文。节分隔注释（`# --- 中文 ---`）使用中文。
 
 ## 错误处理模式
 
@@ -101,7 +102,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 
 ## 注意事项
 
-- **临时方案**：`build.sh` L289-302 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
+- **临时方案**：`build.sh` L289-303 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
 - **测试未覆盖端到端构建**：`build.sh` 和 `update.sh` 的测试只覆盖 CLI 接口（`--help`, `--version`, 参数解析），实际构建/更新行为不在此项目的测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行
