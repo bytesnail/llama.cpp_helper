@@ -157,8 +157,8 @@ llama_activate_conda() {
     fi
 
     if [[ -z "$conda_root" ]]; then
-        local _candidate
-        for _candidate in \
+        local candidate
+        for candidate in \
             "${HOME}/miniconda3" \
             "${HOME}/anaconda3" \
             "${HOME}/miniforge3" \
@@ -168,8 +168,8 @@ llama_activate_conda() {
             "/opt/anaconda3" \
             "/opt/miniforge3"
         do
-            if [[ -f "${_candidate}/etc/profile.d/conda.sh" ]]; then
-                conda_root="$_candidate"
+            if [[ -f "${candidate}/etc/profile.d/conda.sh" ]]; then
+                conda_root="$candidate"
                 break
             fi
         done
@@ -196,16 +196,16 @@ llama_activate_conda() {
 
     local env_name="${CONDA_ENV_NAME:-base}"
     # Execute conda activate directly (not in a command substitution subshell, or env changes are lost)
-    local _conda_err_file
-    _conda_err_file=$(mktemp "${TMPDIR:-/tmp}/conda_activate_err.XXXXXX" 2>/dev/null) || _conda_err_file=""
-    if [[ -n "$_conda_err_file" ]]; then
-        if conda activate "$env_name" 2>"$_conda_err_file"; then
+    local conda_err_file
+    conda_err_file=$(mktemp "${TMPDIR:-/tmp}/conda_activate_err.XXXXXX" 2>/dev/null) || conda_err_file=""
+    if [[ -n "$conda_err_file" ]]; then
+        if conda activate "$env_name" 2>"$conda_err_file"; then
             llama_ok "已激活 conda 环境: ${env_name}"
         else
             llama_warn "conda 环境激活失败: ${env_name}"
-            llama_detail "$(cat "$_conda_err_file" 2>/dev/null || true)"
+            llama_detail "$(cat "$conda_err_file" 2>/dev/null || true)"
         fi
-        rm -f "$_conda_err_file"
+        rm -f "$conda_err_file"
     else
         # Cannot create temp file, fall back to silent mode (no stderr capture)
         if conda activate "$env_name" 2>/dev/null; then
@@ -427,7 +427,7 @@ readonly _LLAMA_BYTES_GIB=1073741824
 # Usage: llama_human_size <bytes>
 # Converts byte count to human-readable format (KiB/MiB/GiB)
 llama_human_size() {
-    local bytes=$1
+    local bytes="$1"
     if ((bytes >= _LLAMA_BYTES_GIB)); then
         local gb=$((bytes / _LLAMA_BYTES_GIB))
         local frac=$(( (bytes % _LLAMA_BYTES_GIB) * 100 / _LLAMA_BYTES_GIB ))
@@ -521,28 +521,29 @@ llama_show_version() {
 
 # Usage: llama_save_colors
 # Saves current color variable values for later restoration.
+# NOTE: run_env.sh contains an inline copy of this loop (lines 32-34) because common.sh
+#       is not yet loaded when colors must be saved. Both copies must be kept in sync.
 llama_save_colors() {
-    local _cvar
-    for _cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-        printf -v "_LLAMA_SAVED_${_cvar}" '%s' "${!_cvar-}"
+    local cvar
+    for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+        printf -v "_LLAMA_SAVED_${cvar}" '%s' "${!cvar-}"
     done
 }
 
 # Usage: llama_restore_colors
 # Restores color variables saved by llama_save_colors. Cleans up temp vars.
 llama_restore_colors() {
-    local _cvar _saved_var
-    for _cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-        _saved_var="_LLAMA_SAVED_${_cvar}"
-        if [[ -n "${!_saved_var+isset}" ]]; then
-            printf -v "$_cvar" '%s' "${!_saved_var}"
+    local cvar saved_var
+    for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+        saved_var="_LLAMA_SAVED_${cvar}"
+        if [[ -n "${!saved_var+isset}" ]]; then
+            printf -v "$cvar" '%s' "${!saved_var}"
         else
-            unset "$_cvar" 2>/dev/null || true
+            unset "$cvar" 2>/dev/null || true
         fi
-        unset "$_saved_var"
+        unset "$saved_var"
     done
 }
-# --- 运行示例输出 ----------------------------------------------
 # Usage: llama_print_run_examples <bin_dir>
 llama_print_run_examples() {
     local bin_dir="${1:?bin_dir required}"
@@ -554,13 +555,26 @@ llama_print_run_examples() {
 }
 
 # Usage: llama_run_silent <command> [args...]
+# Runs command without set -e, capturing output. On failure, prints output to stderr.
 llama_run_silent() {
-    local _ret
-    local _prev_opts
-    _prev_opts=$(set +o)
+    local ret
+    local prev_opts
+    local tmp_out
+    tmp_out=$(mktemp "${TMPDIR:-/tmp}/llama_run_silent.XXXXXX" 2>/dev/null) || tmp_out=""
+    prev_opts=$(set +o)
     set +e
-    "$@"
-    _ret=$?
-    eval "$_prev_opts" 2>/dev/null || true
-    return "$_ret"
+    if [[ -n "$tmp_out" ]]; then
+        "$@" >"$tmp_out" 2>&1
+        ret=$?
+        if [[ "$ret" -ne 0 ]]; then
+            llama_warn "命令失败 (退出码: ${ret})"
+            cat "$tmp_out" >&2 2>/dev/null || true
+        fi
+        rm -f "$tmp_out"
+    else
+        "$@"
+        ret=$?
+    fi
+    eval "$prev_opts" 2>/dev/null || true
+    return "$ret"
 }

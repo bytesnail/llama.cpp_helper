@@ -28,6 +28,7 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 # --- 退出清理 ------------------------------------------------
+# Usage: _cleanup_on_exit
 _cleanup_on_exit() {
     local exit_code=$?
     [[ "${_CLEANUP_DONE:-0}" -eq 1 ]] && return 0
@@ -46,6 +47,7 @@ fi
 # EXIT trap: ensures cleanup on llama_die→exit paths; _CLEANUP_DONE guard prevents
 # double-fire when SIGINT/SIGTERM (L34) and EXIT both trigger.
 # --- 帮助信息 ------------------------------------------------
+# Usage: _show_help
 _show_help() {
     llama_show_help \
         "$(basename "$0")" \
@@ -58,6 +60,7 @@ _show_help() {
   bash build.sh --help       # 显示帮助"
 }
 
+# Usage: _detect_cuda_lib_dir
 _detect_cuda_lib_dir() {
     if ! command -v nvcc &>/dev/null; then
         return 1
@@ -84,8 +87,7 @@ _detect_cuda_lib_dir() {
 
 # --- 验证辅助函数 --------------------------------------------
 
-# Check if a single binary exists and report its size
-# Usage: $1=binary_name, $2=bin_dir
+# Usage: _verify_binary_exists <binary_name> <bin_dir>
 # Returns: 0=exists, 1=missing
 _verify_binary_exists() {
     local binary="$1"
@@ -108,8 +110,7 @@ _verify_binary_exists() {
         return 1
     fi
 }
-# Generic link verification helper
-# Usage: $1=bin_dir, $2=binary (default: llama-cli), $3=grep_pattern, $4=label, $5=not_found_msg
+# Usage: _verify_linking <bin_dir> [binary] [grep_pattern] [label] [not_found_msg]
 _verify_linking() {
     local bin_dir="$1"
     if [[ -z "$bin_dir" ]]; then
@@ -140,20 +141,17 @@ _verify_linking() {
     fi
 }
 
-# Check CUDA dynamic library linking
-# Usage: $1=bin_dir, $2=binary (default: llama-cli)
+# Usage: _verify_cuda_linking <bin_dir> [binary]
 _verify_cuda_linking() {
     _verify_linking "${1:-}" "${2:-llama-cli}" "libcudart|libcublas|libcuda" "CUDA" "未找到 CUDA 动态库链接（可能是静态链接）"
 }
 
-# Check OpenBLAS linking
-# Usage: $1=bin_dir, $2=binary (default: llama-cli)
+# Usage: _verify_openblas_linking <bin_dir> [binary]
 _verify_openblas_linking() {
     _verify_linking "${1:-}" "${2:-llama-cli}" "openblas|blas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
 }
 
-# Check CUDA devices (llama-bench --help triggers CUDA init and prints device info)
-# Usage: $1=bin_dir
+# Usage: _verify_cuda_devices <bin_dir>
 _verify_cuda_devices() {
     local bin_dir="$1"
 
@@ -174,8 +172,7 @@ _verify_cuda_devices() {
     fi
 }
 
-# Verify OpenBLAS runtime loadability
-# Usage: $1=bin_dir, $2=binary (default: llama-cli)
+# Usage: _verify_openblas_runtime <bin_dir> [binary]
 _verify_openblas_runtime() {
     local bin_dir="$1"
     local binary="${2:-llama-cli}"
@@ -195,10 +192,11 @@ _verify_openblas_runtime() {
     fi
 }
 
+# Usage: _verify_build
 _verify_build() {
     local errors=0
     local bin_dir="${BUILD_DIR}/bin"
-    local _verify_binary="${REQUIRED_BINARIES[0]}"
+    local verify_binary="${REQUIRED_BINARIES[0]}"
 
     # Check critical binaries
     for binary in "${REQUIRED_BINARIES[@]}"; do
@@ -206,20 +204,20 @@ _verify_build() {
     done
 
     # Link checks (non-fatal)
-    _verify_cuda_linking "$bin_dir" "$_verify_binary"
-    _verify_openblas_linking "$bin_dir" "$_verify_binary"
+    _verify_cuda_linking "$bin_dir" "$verify_binary"
+    _verify_openblas_linking "$bin_dir" "$verify_binary"
 
     # Verify binary executability
     llama_info "验证二进制文件可执行性："
-    if "${bin_dir}/${_verify_binary}" --version &>/dev/null; then
-        llama_ok "${_verify_binary} 可正常启动"
+    if "${bin_dir}/${verify_binary}" --version &>/dev/null; then
+        llama_ok "${verify_binary} 可正常启动"
     else
-        llama_warn "${_verify_binary} 启动验证失败"
+        llama_warn "${verify_binary} 启动验证失败"
     fi
 
     # Runtime verification (non-fatal)
     _verify_cuda_devices "$bin_dir" || true
-    _verify_openblas_runtime "$bin_dir" "$_verify_binary" || true
+    _verify_openblas_runtime "$bin_dir" "$verify_binary" || true
     return "$errors"
 }
 

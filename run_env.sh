@@ -28,21 +28,22 @@ _LLAMA_RUN_ENV_SOURCED=1
 # Save color variables — must be done before sourcing common.sh (common.sh would overwrite them)
 # Note: inline code is used instead of llama_save_colors() because that function is in common.sh
 #       and common.sh has not been loaded yet. Functionally equivalent to llama_save_colors() in common.sh.
-for _v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-    printf -v "_LLAMA_SAVED_${_v}" '%s' "${!_v-}"
+# NOTE: common.sh L524-528 contains llama_save_colors(). Both copies must be kept in sync.
+for v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+    printf -v "_LLAMA_SAVED_${v}" '%s' "${!v-}"
 done
-unset _v
+unset v
 
 # Bootstrap: find and source common.sh (shared helpers not yet available)
-_BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-if [[ ! -f "${_BOOT_DIR}/common.sh" ]]; then
+boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+if [[ ! -f "${boot_dir}/common.sh" ]]; then
     # shellcheck disable=SC2317
-    echo "[ERROR] 未找到 common.sh: ${_BOOT_DIR}/common.sh" >&2
+    echo "[ERROR] 未找到 common.sh: ${boot_dir}/common.sh" >&2
     return 1 2>/dev/null || exit 1
 fi
 # shellcheck source=/dev/null
-source "${_BOOT_DIR}/common.sh"
-unset _BOOT_DIR
+source "${boot_dir}/common.sh"
+unset boot_dir
 
 # Shared helpers now available — set SCRIPT_DIR correctly
 llama_init_script_dir
@@ -62,6 +63,7 @@ declare -A _LLAMA_RUN_ENV_VARS=(
 )
 
 # --- 帮助信息 ------------------------------------------------
+# Usage: _show_help
 _show_help() {
     llama_show_help \
         "source $(basename "${BASH_SOURCE[0]}")" \
@@ -75,6 +77,7 @@ _show_help() {
     _show_env_vars
 }
 
+# Usage: _show_env_vars
 _show_env_vars() {
     local var
     echo ""
@@ -94,6 +97,7 @@ _show_env_vars() {
     done
 }
 
+# Usage: _sorted_env_var_names
 _sorted_env_var_names() {
     printf '%s\n' "${!_LLAMA_RUN_ENV_VARS[@]}" | sort
 }

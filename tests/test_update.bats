@@ -130,11 +130,11 @@ load test_helper
     [[ ! -d "${fake_repo}/.git/modules/old_sub" ]]
 }
 
-@test "_json_field_gh extracts field from valid JSON" {
+@test "_json_field extracts field from valid JSON" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     local test_json='{"tagName":"b4000","targetCommitish":"abc1234567890"}'
-    run _json_field_gh "$test_json" "tagName"
+    run _json_field "tagName" <<< "$test_json"
     [ "$status" -eq 0 ]
     [ "$output" = "b4000" ]
 }

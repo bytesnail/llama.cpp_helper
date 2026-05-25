@@ -24,6 +24,7 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 BUILD_SCRIPT="${SCRIPT_DIR}/build.sh"
+readonly BUILD_SCRIPT
 # --- 状态变量 ------------------------------------------------
 release_tag=""
 release_commit=""
@@ -42,6 +43,7 @@ actual_commit=""
 actual_tag=""
 
 # --- 帮助信息 ------------------------------------------------
+# Usage: _show_help
 _show_help() {
     llama_show_help \
         "$(basename "$0")" \
@@ -57,19 +59,21 @@ _show_help() {
 # --- 工具函数 ------------------------------------------------
 
 # Save current state for rollback
+# Usage: _save_state
 _save_state() {
     current_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
     current_short=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD)
     current_tag=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
-    local _branch
-    if _branch=$(git -C "$LLAMA_CPP_SRC" symbolic-ref --short HEAD 2>/dev/null); then
-        current_branch="$_branch"
+    local branch
+    if branch=$(git -C "$LLAMA_CPP_SRC" symbolic-ref --short HEAD 2>/dev/null); then
+        current_branch="$branch"
     else
         current_branch=""
     fi
 }
 
 # Roll back to previous state
+# Usage: _rollback
 _rollback() {
     if [[ -z "${current_commit:-}" ]]; then
         llama_err "无法回滚：未保存原始 commit"
@@ -108,6 +112,7 @@ _rollback() {
 
 # Interrupt recovery trap — restore pre-update state on SIGINT/SIGTERM
 # llama_safe_exit 130: 130 = 128 + 2 (SIGINT standard exit code)
+# Usage: _cleanup_on_interrupt
 _cleanup_on_interrupt() {
     llama_warn "更新被中断，正在恢复..."
     llama_cleanup_trap
@@ -121,6 +126,7 @@ _cleanup_on_interrupt() {
     llama_safe_exit 130
 }
 
+# Usage: _cleanup_stale_submodules
 _cleanup_stale_submodules() {
     local -A expected_paths
     while IFS= read -r path; do
@@ -153,19 +159,13 @@ _cleanup_stale_submodules() {
     fi
 }
 
-_json_field_gh() {
-    local json="$1" field="$2"
-    printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$field"
+# Usage: _json_field <field_name>
+# Extracts a JSON field using Python. Input is piped via stdin.
+_json_field() {
+    python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"
 }
 
-_json_field_curl() {
-    local file="$1" field="$2"
-    python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$field" < "$file"
-}
-
-# Print build success summary
 # Usage: _print_success_summary <source_updated> <current_ver> <target_ver> <release_date>
-#   source_updated: "1"=source updated, "0"=rebuild only
 _print_success_summary() {
     local source_updated="$1"
     local current_ver="$2"
@@ -196,17 +196,19 @@ _print_success_summary() {
 }
 
 # --- GitHub API 查询 -----------------------------------------
+# Usage: _fetch_latest_release_gh
 _fetch_latest_release_gh() {
     local json
     if ! json=$(gh release view --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
         return 1
     fi
-    release_tag=$(_json_field_gh "$json" tagName) || return 1
-    release_commit=$(_json_field_gh "$json" targetCommitish) || return 1
-    release_date=$(_json_field_gh "$json" publishedAt) || return 1
-    release_url=$(_json_field_gh "$json" url) || return 1
+    release_tag=$(printf '%s' "$json" | _json_field tagName) || return 1
+    release_commit=$(printf '%s' "$json" | _json_field targetCommitish) || return 1
+    release_date=$(printf '%s' "$json" | _json_field publishedAt) || return 1
+    release_url=$(printf '%s' "$json" | _json_field url) || return 1
 }
 
+# Usage: _fetch_latest_release_curl
 _fetch_latest_release_curl() {
     if ! command -v curl &>/dev/null; then
         llama_err "需要 curl 命令，请先安装"
@@ -235,14 +237,15 @@ _fetch_latest_release_curl() {
     fi
 
     # Use stdin redirection to avoid path injection into Python strings
-    release_tag=$(_json_field_curl "$tmp" tag_name) || return 1
-    release_commit=$(_json_field_curl "$tmp" target_commitish) || return 1
-    release_date=$(_json_field_curl "$tmp" published_at) || return 1
-    release_url=$(_json_field_curl "$tmp" html_url) || return 1
+    release_tag=$(_json_field tag_name < "$tmp") || return 1
+    release_commit=$(_json_field target_commitish < "$tmp") || return 1
+    release_date=$(_json_field published_at < "$tmp") || return 1
+    release_url=$(_json_field html_url < "$tmp") || return 1
 }
 
 # --- 子函数 --------------------------------------------------
 
+# Usage: _parse_args [target_version]
 _parse_args() {
     target_version=""
     if (($# > 0)); then
@@ -272,6 +275,7 @@ _parse_args() {
     fi
 }
 
+# Usage: _check_local_repo
 _check_local_repo() {
     llama_info "检查前置条件..."
 
@@ -289,7 +293,7 @@ _check_local_repo() {
 
     orig_dir="$(pwd)"
     cd "$LLAMA_CPP_SRC" >/dev/null
-
+    # Subsequent functions run git commands without -C, relying on this CWD.
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
         git status --short
@@ -326,6 +330,7 @@ _check_local_repo() {
     llama_detail "当前标签:    ${current_tag}"
 }
 
+# Usage: _resolve_target
 _resolve_target() {
     if [[ -n "$target_version" ]]; then
         release_tag="$target_version"
@@ -384,6 +389,9 @@ _resolve_target() {
     elif llama_is_full_commit_sha "${release_commit}" && [[ "$current_commit" = "$release_commit" ]]; then
         llama_ok "本地已是最新 commit (${release_short})，无需更新源码"
         need_source_update=0
+    elif [[ ${#release_commit} -ge 7 ]] && [[ "$(git -C "$LLAMA_CPP_SRC" rev-parse --verify "${release_commit}^{commit}" 2>/dev/null)" == "$current_commit" ]]; then
+        llama_ok "本地已是最新 commit (${release_short})，无需更新源码"
+        need_source_update=0
     fi
 
     if [[ "$need_source_update" -eq 0 ]]; then
@@ -399,6 +407,7 @@ _resolve_target() {
     fi
 }
 
+# Usage: _update_source
 _update_source() {
     llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
     llama_info "正在从远程仓库拉取最新引用..."
@@ -410,10 +419,10 @@ _update_source() {
 
     # Try to fetch specific tag (if it's a tag)
     if git ls-remote --tags origin "refs/tags/${release_tag}" 2>/dev/null | grep -q "refs/tags/${release_tag}"; then
-        local _tag_fetch_rc=0
-        git fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" || _tag_fetch_rc=$?
-        if [[ "$_tag_fetch_rc" -ne 0 ]]; then
-            llama_detail "特定标签 ref fetch 失败 (退出码: ${_tag_fetch_rc})，将使用已拉取的标签"
+        local tag_fetch_rc=0
+        git fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" || tag_fetch_rc=$?
+        if [[ "$tag_fetch_rc" -ne 0 ]]; then
+            llama_detail "特定标签 ref fetch 失败 (退出码: ${tag_fetch_rc})，将使用已拉取的标签"
         fi
     fi
 
@@ -464,6 +473,7 @@ _update_source() {
     fi
 }
 
+# Usage: _build_with_rollback
 _build_with_rollback() {
     if [[ "$need_source_update" -eq 1 ]]; then
         llama_step "源码更新完成，开始构建..."
@@ -478,7 +488,7 @@ _build_with_rollback() {
     local build_status=$?
 
     if [[ "$build_status" -ne 0 ]]; then
-        _rollback
+        _rollback || true
         llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
         llama_step "回滚后重新构建..."
         llama_run_silent bash "$BUILD_SCRIPT"
