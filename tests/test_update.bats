@@ -34,8 +34,8 @@ load test_helper
 @test "update.sh warns about extra arguments" {
     run bash "${BATS_TEST_DIRNAME}/../update.sh" b3631 extra_arg
     [[ "$output" =~ "忽略额外参数" ]]
-    # 脚本在 _check_local_repo 失败后会以非零退出码退出，
-    # 但在此之前已经警告了额外参数 — 这就足以进行测试了
+    # Script exits with non-zero after _check_local_repo failure,
+    # but the extra argument warning fires before that — sufficient for test coverage
     # [ "$status" -ne 0 ]
 }
 
@@ -53,7 +53,7 @@ load test_helper
     [[ "$output" =~ "版本切换失败" || "$output" =~ "本地找不到目标版本" || "$status" -ne 0 ]]
 }
 
-@test "_save_state sets CURRENT_BRANCH after sourcing" {
+@test "_save_state sets current_branch after sourcing" {
     # Create a fake llama.cpp repo on a branch
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
     mkdir -p "${fake_repo}"
@@ -65,16 +65,16 @@ load test_helper
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
     LLAMA_CPP_SRC="${fake_repo}"
-    CURRENT_COMMIT=""; CURRENT_SHORT=""; CURRENT_TAG=""; CURRENT_BRANCH=""
+    current_commit=""; current_short=""; current_tag=""; current_branch=""
     # Evaluate _save_state function body directly from update.sh
     _save_state() {
-        CURRENT_COMMIT=$(git -C "${LLAMA_CPP_SRC}" rev-parse HEAD)
-        CURRENT_SHORT=$(git -C "${LLAMA_CPP_SRC}" rev-parse --short HEAD)
-        CURRENT_TAG=$(git -C "${LLAMA_CPP_SRC}" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
-        CURRENT_BRANCH=$(git -C "${LLAMA_CPP_SRC}" symbolic-ref --short HEAD 2>/dev/null || echo "")
+        current_commit=$(git -C "${LLAMA_CPP_SRC}" rev-parse HEAD)
+        current_short=$(git -C "${LLAMA_CPP_SRC}" rev-parse --short HEAD)
+        current_tag=$(git -C "${LLAMA_CPP_SRC}" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
+        current_branch=$(git -C "${LLAMA_CPP_SRC}" symbolic-ref --short HEAD 2>/dev/null || echo "")
     }
     _save_state
-    [ "$CURRENT_BRANCH" = "test-branch" ]
+    [ "$current_branch" = "test-branch" ]
 }
 
 @test "_print_success_summary outputs expected format" {
@@ -87,9 +87,9 @@ load test_helper
     # llama_print_run_examples needs SCRIPT_DIR
     llama_init_script_dir
 
-    CURRENT_SHORT="abc1234"
-    RELEASE_TAG="b4000"
-    CURRENT_TAG="(旧标签)"
+    current_short="abc1234"
+    release_tag="b4000"
+    current_tag="(旧标签)"
     run _print_success_summary 1 "旧版" "b4000" "2026-01-01"
     [ "$status" -eq 0 ]
     [[ "$output" == *"abc1234"* || "$output" == *"旧版"* ]]
@@ -175,8 +175,8 @@ load test_helper
     eval "$(sed -n '/^_save_state()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
     LLAMA_CPP_SRC="$fake_repo"
     _save_state
-    [ -n "$CURRENT_COMMIT" ]
-    [ -z "$CURRENT_BRANCH" ]
+    [ -n "$current_commit" ]
+    [ -z "$current_branch" ]
 }
 
 @test "_print_success_summary with source_updated=0 shows rebuild message" {

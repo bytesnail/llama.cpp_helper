@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# common.sh — 共享工具函数库
+# common.sh — shared utility function library
 # Shared utilities for all helper scripts
 # Requires: Bash >= 4.2 (declare -A associative arrays, [[ -v ]] variable test)
 # ============================================================
@@ -11,10 +11,10 @@ if [[ "$_LLAMA_COMMON_SOURCED" -eq 1 ]]; then
     return 0 2>/dev/null || true
 fi
 _LLAMA_COMMON_SOURCED=1
-# 语言策略：本项目的用户消息（日志、错误、帮助文本）以中文为主要语言。
-# 仅在确实必要时使用英文。修改或添加消息时请遵循此约定。
+# Language policy: user-facing messages (logs, errors, help text) use Chinese primarily.
+# Use English only when truly necessary. Follow this convention when editing or adding messages.
 # --- 安全设置 ------------------------------------------------
-# 仅在直接执行时启用严格模式（source 时不启用）
+# Enable strict mode only when executed directly (not when sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set -euo pipefail
 fi
@@ -195,7 +195,7 @@ llama_activate_conda() {
     source "$conda_sh"
 
     local env_name="${CONDA_ENV_NAME:-base}"
-    # 直接执行 conda activate（不使用命令替换子 shell，否则环境修改会丢失）
+    # Execute conda activate directly (not in a command substitution subshell, or env changes are lost)
     local _conda_err_file
     _conda_err_file=$(mktemp "${TMPDIR:-/tmp}/conda_activate_err.XXXXXX" 2>/dev/null) || _conda_err_file=""
     if [[ -n "$_conda_err_file" ]]; then
@@ -207,7 +207,7 @@ llama_activate_conda() {
         fi
         rm -f "$_conda_err_file"
     else
-        # 无法创建临时文件，回退到静默模式（不捕获错误输出）
+        # Cannot create temp file, fall back to silent mode (no stderr capture)
         if conda activate "$env_name" 2>/dev/null; then
             llama_ok "已激活 conda 环境: ${env_name}"
         else
@@ -219,7 +219,7 @@ llama_activate_conda() {
 }
 
 # --- 文件锁 --------------------------------------------------
-# 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
+# Use dynamic file descriptor (auto FD_CLOEXEC) to prevent child processes from inheriting the lock
 
 # Usage: _recover_stale_lock <lock_file>
 # Attempts to recover a stale lock. Returns 0 on success (LOCK_FD set), 1 on failure.
@@ -251,13 +251,13 @@ _recover_stale_lock() {
 
 # Usage: llama_acquire_lock [lock_file] — returns 0 on success, 1 if lock held
 llama_acquire_lock() {
-    local lock_file="${1:-$LOCK_FILE}"  # 默认使用脚本级 LOCK_FILE
+    local lock_file="${1:-$LOCK_FILE}"  # default to script-level LOCK_FILE
     if [[ -z "$lock_file" ]]; then
         llama_err "未指定锁文件路径"
         return 1
     fi
 
-    # 确保锁文件目录存在
+    # Ensure lock file directory exists
     local lock_dir
     lock_dir=$(dirname "$lock_file")
     if [[ ! -d "$lock_dir" ]]; then
@@ -268,7 +268,7 @@ llama_acquire_lock() {
     exec {fd}>>"$lock_file"
 
     if ! flock -n "$fd"; then
-        # 锁被占用 — 仅在 flock 失败后从文件读取 PID 用于诊断
+        # Lock is held — read PID from file for diagnostics only after flock fails
         local holder_pid
         holder_pid=$(cat "$lock_file" 2>/dev/null || true)
         local holder_cmd
@@ -296,8 +296,8 @@ llama_release_lock() {
         exec {LOCK_FD}>&- 2>/dev/null || true
         unset LOCK_FD
     fi
-    # 锁文件不会被删除 — flock 基于 inode 而非文件名工作。
-    # 如果在另一个进程等待时删除，会导致等待者锁定一个已删除的 inode。
+    # Lock files must not be deleted — flock operates on inodes, not filenames.
+    # Deleting while another process is waiting would cause it to lock a deleted inode.
 }
 
 # --- 磁盘空间检查 --------------------------------------------
@@ -309,7 +309,7 @@ llama_check_disk_space() {
 
     if [[ ! -d "$path" ]]; then
         llama_warn "无法检查磁盘空间：路径不存在 $path"
-        return 0  # 不阻塞，仅警告
+        return 0  # Non-blocking, warn only
     fi
 
     local available_kb
@@ -374,7 +374,7 @@ llama_is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
 # Checks if the current build is complete and matches the current source commit.
 # Returns 0 = build healthy, 1 = build missing or stale.
 llama_check_build_health() {
-    # 守卫：确保 config.sh 已被 source
+    # Guard: ensure config.sh has been sourced
     if [[ -z "${LLAMA_CPP_SRC:-}" ]]; then
         return 1
     fi
@@ -382,13 +382,13 @@ llama_check_build_health() {
     if [[ ! -d "$bin_dir" ]]; then
         return 1
     fi
-    # 检查关键二进制文件是否存在且可执行
+    # Check that critical binaries exist and are executable
     for binary in "${REQUIRED_BINARIES[@]}"; do
         if [[ ! -x "${bin_dir}/${binary}" ]]; then
             return 1
         fi
     done
-    # 检查构建标记文件是否存在且与当前源码 commit 匹配
+    # Check that build stamp file exists and matches current source commit
     local build_stamp="${LLAMA_CPP_SRC}/build/.build-stamp"
     local current_head
     current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
@@ -399,7 +399,7 @@ llama_check_build_health() {
             return 0
         fi
     fi
-    # 没有标记文件或不匹配，说明 build 目录可能来自其他版本
+    # No stamp file or mismatch means build dir may be from a different version
     return 1
 }
 
@@ -411,7 +411,7 @@ llama_file_size() {
     if [[ ! -f "$path" ]]; then
         return 1
     fi
-    # 优先尝试 GNU stat，然后 BSD stat
+    # Prefer GNU stat, then fall back to BSD stat
     local size
     size=$(stat -c %s "$path" 2>/dev/null) || \
     size=$(stat -f%z "$path" 2>/dev/null) || \
@@ -445,13 +445,13 @@ llama_human_size() {
 
 # --- 退出辅助 ------------------------------------------------
 # Usage: llama_cd_back
-# Returns to ORIG_DIR safely. Designed for update.sh error paths.
+# Returns to orig_dir safely. Designed for update.sh error paths.
 llama_cd_back() {
-    if [[ -z "${ORIG_DIR:-}" ]]; then
+    if [[ -z "${orig_dir:-}" ]]; then
         return 0
     fi
-    cd "$ORIG_DIR" >/dev/null 2>&1 || {
-        llama_warn "无法返回原始目录: ${ORIG_DIR}"
+    cd "$orig_dir" >/dev/null 2>&1 || {
+        llama_warn "无法返回原始目录: ${orig_dir}"
         return 1
     }
 }
@@ -479,7 +479,7 @@ llama_safe_exit() {
 # Usage: llama_return_or_exit <exit_code>
 llama_return_or_exit() {
     local code="$1"
-    # 在 source 上下文中: return 成功。在脚本中: return 失败，回退到 exit。
+    # In source context: return succeeds. In script context: return fails, fall back to exit.
     { return "$code"; } 2>/dev/null || exit "$code"
 }
 

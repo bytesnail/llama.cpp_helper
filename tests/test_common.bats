@@ -123,7 +123,7 @@ teardown() {
     (
         source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
         LOCK_FILE="${LOCK_FILE}" llama_acquire_lock
-        sleep 2  # 减少测试等待时间
+        sleep 2  # Reduce test wait time
         LOCK_FILE="${LOCK_FILE}" llama_release_lock
     ) &
     local bg_pid=$!
@@ -206,7 +206,7 @@ teardown() {
     llama_cleanup_trap
     local handler
     handler=$(trap -p SIGINT 2>&1 || true)
-    [[ "$handler" == "" ]]  # 重置后 trap -p SIGINT 应输出空
+    [[ "$handler" == "" ]]  # After reset, trap -p SIGINT should output empty
 }
 
 # --- Exit Helpers ---
@@ -235,17 +235,17 @@ teardown() {
 }
 
 # --- llama_cd_back ---
-@test "llama_cd_back returns 0 when ORIG_DIR is unset" {
+@test "llama_cd_back returns 0 when orig_dir is unset" {
     source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    unset ORIG_DIR
+    unset orig_dir
     run llama_cd_back
     [ "$status" -eq 0 ]
 }
 
-@test "llama_cd_back changes to ORIG_DIR when set" {
+@test "llama_cd_back changes to orig_dir when set" {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
-        ORIG_DIR='/tmp'
+        orig_dir='/tmp'
         llama_cd_back
         pwd
     "
@@ -253,10 +253,10 @@ teardown() {
     [ "$output" = "/tmp" ]
 }
 
-@test "llama_cd_back returns 1 and warns when ORIG_DIR is nonexistent" {
+@test "llama_cd_back returns 1 and warns when orig_dir is nonexistent" {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
-        ORIG_DIR='/nonexistent_dir_xyz_123'
+        orig_dir='/nonexistent_dir_xyz_123'
         llama_cd_back
         echo \$?
     "
