@@ -5,7 +5,11 @@
 # Usage: cd /path/to/llama.cpp_helper && bash update.sh [tag|commit]
 # ============================================================
 
-set -euo pipefail
+# Enable strict mode only when executing normally (not when sourced for test extraction)
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    set -euo pipefail
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 # Note: SCRIPT_DIR is initialized inline here because source common.sh needs it.
 # llama_init_script_dir() exists but is only used when SCRIPT_DIR cannot be resolved early (e.g. run_env.sh).
@@ -14,10 +18,12 @@ source "${SCRIPT_DIR}/common.sh"
 source "${SCRIPT_DIR}/config.sh"
 
 # --- 文件锁定 ------------------------------------------------
-llama_acquire_lock || llama_die "无法获取文件锁"
+# Skip setup code when sourced for test extraction
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    llama_acquire_lock || llama_die "无法获取文件锁"
+fi
 
 BUILD_SCRIPT="${SCRIPT_DIR}/build.sh"
-
 # --- 状态变量 ------------------------------------------------
 release_tag=""
 release_commit=""
@@ -304,7 +310,6 @@ _check_local_repo() {
     # Set up interrupt recovery trap (function defined at top level)
     llama_setup_trap _cleanup_on_interrupt
 
-
     local actual_remote
     actual_remote=$(git remote get-url origin 2>/dev/null || echo "")
     local normalized_remote="${actual_remote%.git}"
@@ -466,6 +471,8 @@ _build_with_rollback() {
         llama_step "开始重新构建..."
     fi
 
+    # Release lock before spawning build.sh — build.sh acquires its own lock,
+    # and holding both would create a deadlock (same lock file, same UID).
     llama_release_lock
     llama_run_silent bash "$BUILD_SCRIPT"
     local build_status=$?
@@ -523,6 +530,8 @@ main() {
     return 0
 }
 
-main "$@"
-_main_rc=$?
-llama_return_or_exit "$_main_rc"
+if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
+    main "$@"
+    _main_rc=$?
+    llama_return_or_exit "$_main_rc"
+fi

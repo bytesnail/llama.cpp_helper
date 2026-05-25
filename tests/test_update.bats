@@ -61,28 +61,16 @@ load test_helper
     git -C "${fake_repo}" commit --allow-empty -q -m "init"
     git -C "${fake_repo}" checkout -q -b test-branch
 
-    # Source common.sh for logging functions, then set vars and run _save_state inline
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+    # Source update.sh in test-only mode to load _save_state
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
     LLAMA_CPP_SRC="${fake_repo}"
     current_commit=""; current_short=""; current_tag=""; current_branch=""
-    # Evaluate _save_state function body directly from update.sh
-    _save_state() {
-        current_commit=$(git -C "${LLAMA_CPP_SRC}" rev-parse HEAD)
-        current_short=$(git -C "${LLAMA_CPP_SRC}" rev-parse --short HEAD)
-        current_tag=$(git -C "${LLAMA_CPP_SRC}" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
-        current_branch=$(git -C "${LLAMA_CPP_SRC}" symbolic-ref --short HEAD 2>/dev/null || echo "")
-    }
     _save_state
     [ "$current_branch" = "test-branch" ]
 }
 
 @test "_print_success_summary outputs expected format" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
-
-    # Extract _print_success_summary from update.sh
-    eval "$(sed -n '/^_print_success_summary()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     # llama_print_run_examples needs SCRIPT_DIR
     llama_init_script_dir
@@ -97,8 +85,7 @@ load test_helper
 }
 
 @test "_cleanup_stale_submodules handles no stale entries cleanly" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     # Create a minimal git repo with a .gitmodules file (no stale entries)
     local fake_repo="${TEST_TMPDIR}/clean_repo"
@@ -110,9 +97,6 @@ load test_helper
     touch "${fake_repo}/sub/.git"  # regular file, not gitdir ref — won't match grep
     git -C "$fake_repo" add sub/.git 2>/dev/null || true
 
-    # Extract _cleanup_stale_submodules from update.sh
-    eval "$(sed -n '/^_cleanup_stale_submodules()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
-
     LLAMA_CPP_SRC="$fake_repo" run _cleanup_stale_submodules
     [ "$status" -eq 0 ]
     # No stale entries means no cleanup output message
@@ -121,9 +105,7 @@ load test_helper
 
 
 @test "_cleanup_stale_submodules removes stale submodule with gitdir ref" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
-    eval "$(sed -n '/^_cleanup_stale_submodules()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     local fake_repo="${TEST_TMPDIR}/stale_repo"
     mkdir -p "$fake_repo"
@@ -149,9 +131,7 @@ load test_helper
 }
 
 @test "_json_field_gh extracts field from valid JSON" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
-    eval "$(sed -n '/^_json_field_gh()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     local test_json='{"tagName":"b4000","targetCommitish":"abc1234567890"}'
     run _json_field_gh "$test_json" "tagName"
@@ -160,8 +140,7 @@ load test_helper
 }
 
 @test "_save_state captures empty branch when detached HEAD" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     local fake_repo="${TEST_TMPDIR}/detached_repo"
     mkdir -p "$fake_repo"
@@ -172,7 +151,6 @@ load test_helper
     commit_sha=$(git -C "$fake_repo" rev-parse HEAD)
     git -C "$fake_repo" checkout -q "$commit_sha" 2>/dev/null
 
-    eval "$(sed -n '/^_save_state()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
     LLAMA_CPP_SRC="$fake_repo"
     _save_state
     [ -n "$current_commit" ]
@@ -180,12 +158,37 @@ load test_helper
 }
 
 @test "_print_success_summary with source_updated=0 shows rebuild message" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
-    eval "$(sed -n '/^_print_success_summary()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
     llama_init_script_dir
 
     run _print_success_summary 0 "abc1234" "b4000" ""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "重新构建完成" || "$output" =~ "构建完成" ]]
+}
+
+@test "_rollback restores previous commit with fake repo" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    local fake_repo="${TEST_TMPDIR}/rollback_test"
+    mkdir -p "$fake_repo"
+    git -C "$fake_repo" init -q
+    git -C "$fake_repo" commit --allow-empty -q -m "first"
+    local first_commit
+    first_commit=$(git -C "$fake_repo" rev-parse HEAD)
+    git -C "$fake_repo" commit --allow-empty -q -m "second"
+    local second_commit
+    second_commit=$(git -C "$fake_repo" rev-parse HEAD)
+
+    LLAMA_CPP_SRC="$fake_repo"
+    current_commit="$first_commit"
+    current_short=$(git -C "$fake_repo" rev-parse --short "$first_commit")
+
+    run _rollback
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "已回滚到" ]]
+
+    # Verify HEAD was restored to first commit
+    local restored_head
+    restored_head=$(git -C "$fake_repo" rev-parse HEAD)
+    [ "$restored_head" = "$first_commit" ]
 }

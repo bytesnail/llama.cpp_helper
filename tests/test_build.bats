@@ -36,13 +36,8 @@ load test_helper
 }
 
 @test "_verify_linking returns 0 and warns when bin_dir is empty" {
-    # Source common.sh for llama_* functions, config.sh for config vars
-    source "${BATS_TEST_DIRNAME}/../common.sh"
-    # shellcheck source=/dev/null
-    source "${BATS_TEST_DIRNAME}/../config.sh"
-
-    # Extract _verify_linking function from build.sh without executing top-level code
-    eval "$(sed -n '/^_verify_linking()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+    # Source build.sh in test-only mode to load all functions without executing top-level code
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
 
     run _verify_linking "" "llama-cli" "libcudart" "CUDA" "not found"
     [ "$status" -eq 0 ]
@@ -50,13 +45,7 @@ load test_helper
 }
 
 @test "_detect_cuda_lib_dir returns failure when nvcc not found" {
-    # Source common.sh for llama_* functions, config.sh for config vars
-    source "${BATS_TEST_DIRNAME}/../common.sh"
-    # shellcheck source=/dev/null
-    source "${BATS_TEST_DIRNAME}/../config.sh"
-
-    # Extract _detect_cuda_lib_dir function from build.sh without executing top-level code
-    eval "$(sed -n '/^_detect_cuda_lib_dir()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
 
     local _saved_path="$PATH"
     export PATH="/nonexistent"
@@ -68,10 +57,7 @@ load test_helper
 
 
 @test "_detect_cuda_lib_dir returns correct path when nvcc is in standard CUDA layout" {
-    source "${BATS_TEST_DIRNAME}/../common.sh"
-    # shellcheck source=/dev/null
-    source "${BATS_TEST_DIRNAME}/../config.sh"
-    eval "$(sed -n '/^_detect_cuda_lib_dir()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
 
     # Create fake CUDA layout
     local fake_cuda="${TEST_TMPDIR}/fake_cuda"
@@ -79,7 +65,6 @@ load test_helper
     mkdir -p "$nvcc_bin/../lib64"
     echo '#!/bin/bash' > "${nvcc_bin}/nvcc"
     chmod +x "${nvcc_bin}/nvcc"
-    # Create a real .so as a marker
     touch "${nvcc_bin}/../lib64/libcudart.so"
     mkdir -p "${nvcc_bin}/../targets/x86_64-linux/lib"
     touch "${nvcc_bin}/../targets/x86_64-linux/lib/libcudart.so"
@@ -93,10 +78,7 @@ load test_helper
 }
 
 @test "_verify_binary_exists returns 1 and warns when binary is missing" {
-    source "${BATS_TEST_DIRNAME}/../common.sh"
-    # shellcheck source=/dev/null
-    source "${BATS_TEST_DIRNAME}/../config.sh"
-    eval "$(sed -n '/^_verify_binary_exists()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
 
     local empty_dir="${TEST_TMPDIR}/empty_bin"
     mkdir -p "$empty_dir"
@@ -106,10 +88,7 @@ load test_helper
 }
 
 @test "_verify_linking returns 0 when binary does not exist at given path" {
-    source "${BATS_TEST_DIRNAME}/../common.sh"
-    # shellcheck source=/dev/null
-    source "${BATS_TEST_DIRNAME}/../config.sh"
-    eval "$(sed -n '/^_verify_linking()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")"
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
 
     run _verify_linking "/nonexistent" "llama-cli" "libcudart" "CUDA" "not found"
     [ "$status" -eq 0 ]
