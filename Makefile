@@ -35,6 +35,6 @@ help:
 	@echo "可用目标:"
 	@echo "  lint     - ShellCheck 静态分析（5 个脚本）"
 	@echo "  syntax   - bash -n 语法检查"
-	@echo "  test     - bats-core 测试套件（130 项）"
+	@echo "  test     - bats-core 测试套件（132 项）"
 	@echo "  check    - lint + syntax + test 全部"
 	@echo "  all      - 等同于 check"

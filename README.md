@@ -404,7 +404,7 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（5 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（130 项）
+make test       # bats-core 测试套件（132 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 
