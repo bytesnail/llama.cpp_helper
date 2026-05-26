@@ -11,8 +11,7 @@ if [[ "$_LLAMA_COMMON_SOURCED" -eq 1 ]]; then
     return 0 2>/dev/null || true
 fi
 _LLAMA_COMMON_SOURCED=1
-# Language policy: user-facing messages (logs, errors, help text, CLI output) use Chinese.
-# Code comments: design rationale in Chinese, function behavior descriptions (return values, params) may use English. Usage: lines use English. Section separator comments ("# --- name ---") use Chinese.
+# Language policy: Chinese is the primary language for all user-facing content, code comments, and documentation. English is used only when necessary for code/tech references (function names, file paths, technical terms, proper nouns, Git refs, URLs).
 # Follow this convention when adding or editing messages.
 # --- 安全设置 ------------------------------------------------
 # Enable strict mode only when executed directly (not when sourced)
