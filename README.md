@@ -40,8 +40,9 @@
 | CUDA Toolkit | 需 `nvcc` 可用（不强制特定版本） |
 | OpenBLAS | `libopenblas-dev` 开发包 |
 | Python 3 | JSON 解析（update.sh 使用） |
+| `gh` | GitHub CLI（update.sh 优先使用，未安装时回退到 `curl`） |
 | Git | 源码管理 |
-| `curl` | HTTP 客户端（update.sh 回退方案，优先使用 `gh`） |
+| `curl` | HTTP 客户端（`gh` 未安装时 update.sh 使用） |
 | `flock` | 文件锁（`util-linux` 包，通常预装） |
 
 > 磁盘空间：构建需要至少 10GB 可用空间（脚本自动检查）。
@@ -322,7 +323,7 @@ CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 
 **排查：**
 - `free -h` 检查内存——高并行度编译需要大量内存
-- 降低并行度：手动编译指定并行度：`cmake --build build -j 8`
+- 降低并行度：手动编译指定并行度：`cmake --build "$LLAMA_CPP_SRC/build" -j 8`
 - `df -h` 检查磁盘空间
 
 ### GPU 未检测到
@@ -372,7 +373,7 @@ git submodule update --recursive
    `readlink -f $(which nvcc)`
 2. 如果 CUDA 库在自定义路径，确保 `ldconfig` 能找到 `libcudart.so`：
    `sudo ldconfig` 或设置 `LD_LIBRARY_PATH`
-3. `build.sh` 会自动从 `nvcc` 路径回溯查找 CUDA 库（见 `_detect_cuda_lib_dir()`）
+3. `build.sh` 会自动从 `nvcc` 路径回溯查找 CUDA 库（见 `build.sh` 中的 `_detect_cuda_lib_dir()`）
 
 ### 子模块同步失败
 
