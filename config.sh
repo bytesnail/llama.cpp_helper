@@ -53,8 +53,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # conda environment name to
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # seconds; update.sh HTTP connection timeout
 CURL_MAX_TIME="${CURL_MAX_TIME:-30}"                 # seconds; update.sh HTTP max request time
 # Critical binaries (used by build verification and health checks)
-REQUIRED_BINARIES=("llama-cli" "llama-server")
-readonly REQUIRED_BINARIES
+declare -ar REQUIRED_BINARIES=("llama-cli" "llama-server")
 # Version number
 LLAMA_HELPER_VERSION="1.0.0"
 readonly LLAMA_HELPER_VERSION
