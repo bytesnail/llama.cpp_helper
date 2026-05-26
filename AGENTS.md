@@ -6,7 +6,7 @@
 
 ## 概述
 
-llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1813 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 130 项测试。
+llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1814 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 130 项测试。
 
 用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。本文档面向 AI 代理和开发者。
 
@@ -20,7 +20,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | 层 | 文件 | LOC | 职责 |
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 614 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
+| 工具层 | `common.sh` | 615 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
 | 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 388/548/203 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
 | 测试层 | `tests/` | 1243 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
@@ -35,7 +35,8 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | 修改测试 | `tests/test_<name>.bats` | 每脚本对应一个文件 |
 | 测试辅助函数 | `tests/test_helper.bash` | setup/teardown + 共享 fixture |
 | ShellCheck 规则调整 | `.shellcheckrc` | 每条 disable 有注释说明原因 |
-- **ShellCheck**：`.shellcheckrc` 禁用规则 (SC2034/SC2119/SC2312/SC2317) 除 SC2312 外均在 0.10.0 触发，均为已知误报，保留以供旧版本兼容
+
+> **ShellCheck 禁用说明：** `.shellcheckrc` 禁用规则 (SC2034/SC2119/SC2312/SC2317) 除 SC2312 外均在 0.10.0 触发，均为已知误报，保留以供旧版本兼容。
 
 ## 命名约定
 
@@ -48,8 +49,13 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | 局部变量 | `lowercase_snake` | `local exit_code=$?` |
 | Source 守卫 | `_LLAMA_<NAME>_SOURCED` | `_LLAMA_COMMON_SOURCED` |
 | 脚本文件 | `lowercase.sh` | `build.sh`, `common.sh` |
+`LOCK_FD` 是主要的跨模块可变状态例外：由 `common.sh` 函数设置和读取，多处访问（含各脚本和测试 teardown），保留 `UPPER_SNAKE_CASE` 以突出其跨模块可见性。
 
-`LOCK_FD` 是主要的跨模块可变状态例外：由 `common.sh` 函数设置和读取，多处访问（含各脚本和测试 teardown），保留 `UPPER_SNAKE_CASE` 以突出其跨模块可见性。`orig_dir` 是另一例外：由 `update.sh` 设置，`llama_cd_back()` 读取。`incremental` 和 `_CLEANUP_DONE` 是 `build.sh` 中 script-level 可变状态，供 trap handler 访问。`_LLAMA_SOURCE_ONLY` 由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
+其他跨模块变量例外：
+- `orig_dir`：由 `update.sh` 设置，`llama_cd_back()` 读取。
+- `incremental` 和 `_CLEANUP_DONE`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。
+- `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
+
 ## 日志规范
 
 6 级彩色日志（定义于 `common.sh`），仅在终端时着色（`[[ -t 1 ]]` 检测）：

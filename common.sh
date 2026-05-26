@@ -11,8 +11,9 @@ if [[ "$_LLAMA_COMMON_SOURCED" -eq 1 ]]; then
     return 0 2>/dev/null || true
 fi
 _LLAMA_COMMON_SOURCED=1
-# Language policy: user-facing messages (logs, errors, help text) use Chinese primarily.
-# Use English only when truly necessary. Follow this convention when editing or adding messages.
+# Language policy: user-facing messages (logs, errors, help text, CLI output) use Chinese.
+# Code comments and Usage: lines use English. Section separator comments ("# --- name ---") use Chinese.
+# Follow this convention when adding or editing messages.
 # --- 安全设置 ------------------------------------------------
 # Enable strict mode only when executed directly (not when sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -520,7 +521,7 @@ llama_init_script_dir() {
     export SCRIPT_DIR
 }
 
-# Help text labels follow the language policy defined at file top (L14-15).
+# Help text labels follow the language policy defined at file top.
 
 # Usage: llama_show_help <script_name> <description> [options] [examples]
 # Displays formatted help text to stdout with usage, description, options, and examples sections.
@@ -555,7 +556,7 @@ llama_show_version() {
 
 # Usage: llama_save_colors
 # Saves current color variable values for later restoration.
-# NOTE: run_env.sh contains an inline copy of this loop (lines 32-34) because common.sh
+# NOTE: run_env.sh contains an inline copy of this loop (color save section) because common.sh
 #       is not yet loaded when colors must be saved. Both copies must be kept in sync.
 llama_save_colors() {
     local cvar

@@ -28,7 +28,7 @@ _LLAMA_RUN_ENV_SOURCED=1
 # Save color variables — must be done before sourcing common.sh (common.sh would overwrite them)
 # Note: inline code is used instead of llama_save_colors() because that function is in common.sh
 #       and common.sh has not been loaded yet. Functionally equivalent to llama_save_colors() in common.sh.
-# NOTE: common.sh L556-565 contains llama_save_colors(). Both copies must be kept in sync.
+# NOTE: common.sh → llama_save_colors() — functionally equivalent. Both copies must be kept in sync.
 for v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${v}" '%s' "${!v-}"
 done

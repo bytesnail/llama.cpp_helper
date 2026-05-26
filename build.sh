@@ -46,7 +46,7 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 # EXIT trap: ensures cleanup on llama_die→exit paths; _CLEANUP_DONE guard prevents
-# double-fire when SIGINT/SIGTERM (L35) and EXIT both trigger.
+# double-fire when SIGINT/SIGTERM (the _CLEANUP_DONE guard) and EXIT both trigger.
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
 _show_help() {
