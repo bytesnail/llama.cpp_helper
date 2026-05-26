@@ -11,8 +11,6 @@ if [[ "$_LLAMA_COMMON_SOURCED" -eq 1 ]]; then
     return 0 2>/dev/null || true
 fi
 _LLAMA_COMMON_SOURCED=1
-# Language policy: Chinese is the primary language for all user-facing content, code comments, and documentation. English is used only when necessary for code/tech references (function names, file paths, technical terms, proper nouns, Git refs, URLs).
-# Follow this convention when adding or editing messages.
 # --- 安全设置 ------------------------------------------------
 # Enable strict mode only when executed directly (not when sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
