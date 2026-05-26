@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================================
-# run_env.sh — runtime performance optimization environment variables
-# Hardware: 2× RTX 2080 Ti (NVLink) - discrete GPUs, unified memory not recommended
+# run_env.sh — 运行时性能优化环境变量
+# 硬件：2× RTX 2080 Ti (NVLink) — 离散 GPU，不建议启用统一内存
 # Usage: source /path/to/llama.cpp_helper/run_env.sh
 # ============================================================
 
-# Prevent direct execution
+# 防止直接执行
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "[WARN] 本脚本应当使用 source 执行，而非直接运行" >&2
     echo "用法: source ${BASH_SOURCE[0]} [选项]" >&2
@@ -14,27 +14,27 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# Prevent duplicate source
+# 防止重复 source
 _LLAMA_RUN_ENV_SOURCED=${_LLAMA_RUN_ENV_SOURCED:-0}
 if [[ "$_LLAMA_RUN_ENV_SOURCED" -eq 1 ]]; then
     return 0 2>/dev/null || true
 fi
 _LLAMA_RUN_ENV_SOURCED=1
 
-# This script is designed to be sourced; set -euo pipefail not enabled
-# because exiting when sourced would kill the parent shell
+# 本脚本设计为 source 使用；未启用 set -euo pipefail
+# 因为 source 时退出会杀死父 shell
 
-# Load common.sh
-# Save color variables — must be done before sourcing common.sh (common.sh would overwrite them)
-# Note: inline code is used instead of llama_save_colors() because that function is in common.sh
-#       and common.sh has not been loaded yet. Functionally equivalent to llama_save_colors() in common.sh.
-# NOTE: common.sh → llama_save_colors() — functionally equivalent. Both copies must be kept in sync.
+# 加载 common.sh
+# 保存颜色变量 — 必须在 source common.sh 之前完成（common.sh 会覆盖它们）
+# 注意：使用内联代码而非 llama_save_colors()，因为该函数在 common.sh 中
+#       而 common.sh 尚未加载。功能上等价于 common.sh 中的 llama_save_colors()。
+# 注意：common.sh → llama_save_colors() — 功能等价。两份副本必须保持同步。
 for v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${v}" '%s' "${!v-}"
 done
 unset v
 
-# Bootstrap: find and source common.sh (shared helpers not yet available)
+# 引导：查找并 source common.sh（共享辅助函数尚不可用）
 boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 if [[ ! -f "${boot_dir}/common.sh" ]]; then
     # shellcheck disable=SC2317
@@ -45,18 +45,18 @@ fi
 source "${boot_dir}/common.sh"
 unset boot_dir
 
-# Shared helpers now available — set SCRIPT_DIR correctly
+# 共享辅助函数已可用 — 正确设置 SCRIPT_DIR
 llama_init_script_dir
 
-# Source config.sh for version info (used by llama_show_version)
+# source config.sh 获取版本信息（供 llama_show_version 使用）
 if [[ -f "${SCRIPT_DIR}/config.sh" ]]; then
     # shellcheck source=/dev/null
     source "${SCRIPT_DIR}/config.sh"
 fi
 
 # --- 环境变量定义 --------------------------------------------
-# Use associative array to define all environment variables to set
-# Format: [var_name]="value|description"
+# 使用关联数组定义所有要设置的环境变量
+# 格式：[变量名]="值|描述"
 declare -A _LLAMA_RUN_ENV_VARS=(
     ["GGML_CUDA_P2P"]="1|启用 GPU 间 P2P 直传（NVLink）"
     ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
@@ -82,7 +82,7 @@ _show_env_vars() {
     local var
     echo
     echo "环境变量:"
-    # Use sort for deterministic output order
+    # 使用 sort 确保输出顺序确定性
     for var in $(_sorted_env_var_names); do
         local info="${_LLAMA_RUN_ENV_VARS[$var]}"
         local desc="${info#*|}"
@@ -147,9 +147,9 @@ main() {
     # --- 设置环境变量 --------------------------------------------
     llama_step "设置 llama.cpp 运行环境"
 
-    # Activate conda environment (if available)
+    # 激活 conda 环境（如果可用）
     llama_activate_conda
-    # Detect GPU
+    # 检测 GPU
     local gpu_count
     gpu_count=$(llama_get_gpu_count)
 
@@ -159,14 +159,14 @@ main() {
         llama_ok "检测到 ${gpu_count} 块 GPU"
     fi
 
-    # Set each environment variable
+    # 逐个设置环境变量
     local var info value desc
     for var in $(_sorted_env_var_names); do
         info="${_LLAMA_RUN_ENV_VARS[$var]}"
         value="${info%|*}"
         desc="${info#*|}"
 
-        # Check if already set (allow user to pre-override)
+        # 检查是否已设置（允许用户预先覆盖）
         if [[ -n "${!var:-}" ]]; then
             llama_warn "${var} 已设置为 ${!var}，保留用户值"
         else

@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================================
-# common.sh — shared utility function library
-# Shared utilities for all helper scripts
-# Requires: Bash >= 4.2 (declare -A associative arrays, [[ -v ]] variable test)
+# common.sh — 共享工具函数库
+# 所有辅助脚本的共享工具
+# 要求：Bash >= 4.2（关联数组 declare -A，变量测试 [[ -v ]]）
 # ============================================================
 
 # --- 防止重复 source -----------------------------------------
@@ -12,7 +12,7 @@ if [[ "$_LLAMA_COMMON_SOURCED" -eq 1 ]]; then
 fi
 _LLAMA_COMMON_SOURCED=1
 # --- 安全设置 ------------------------------------------------
-# Enable strict mode only when executed directly (not when sourced)
+# 仅在直接执行时启用严格模式（source 时不启用）
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set -euo pipefail
 fi
@@ -38,17 +38,17 @@ fi
 
 # --- 日志 ----------------------------------------------------
 # Usage: llama_detail <message>
-# Logs a detail message to stdout with blue arrow prefix.
+# 向 stdout 输出带有蓝色箭头前缀的详细信息。
 # Usage: llama_step <header>
-# Logs a bold section header to stdout.
+# 向 stdout 输出粗体节标题。
 # Usage: llama_err <message>
-# Logs an error message to stderr with red [ERROR] prefix.
+# 向 stderr 输出红色 [ERROR] 前缀的错误消息。
 # Usage: llama_warn <message>
-# Logs a warning message to stdout with yellow [WARN] prefix.
+# 向 stdout 输出黄色 [WARN] 前缀的警告消息。
 # Usage: llama_ok <message>
-# Logs a success message to stdout with green [OK] prefix.
+# 向 stdout 输出绿色 [OK] 前缀的成功消息。
 # Usage: llama_info <message>
-# Logs an informational message to stdout with cyan [INFO] prefix.
+# 向 stdout 输出青色 [INFO] 前缀的信息消息。
 llama_info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
 llama_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 llama_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -118,8 +118,8 @@ llama_get_cpu_count() {
 
 # --- GPU 检测 ------------------------------------------------
 # Usage: llama_get_gpu_count
-# Returns the number of NVIDIA GPUs detected via nvidia-smi.
-# Output: GPU count on stdout (0 if none), exit code 0 if nvidia-smi found, 1 if nvidia-smi not installed.
+# 返回通过 nvidia-smi 检测到的 NVIDIA GPU 数量。
+# 输出：stdout 输出 GPU 数量（无则为 0）；退出码：nvidia-smi 存在返回 0，未安装返回 1。
 llama_get_gpu_count() {
     if command -v nvidia-smi &>/dev/null; then
         local count
@@ -148,8 +148,8 @@ llama_check_gpu() {
 
 # --- conda 环境 -----------------------------------------------
 # Usage: llama_activate_conda
-# Detects and activates conda environment. Respects CONDA_AUTO_ACTIVATE
-# and CONDA_ENV_NAME from config.sh. Never fails — always returns 0.
+# 检测并激活 conda 环境。遵循 config.sh 中的 CONDA_AUTO_ACTIVATE
+# 和 CONDA_ENV_NAME 设置。永不失败 — 始终返回 0。
 llama_activate_conda() {
     if [[ "${CONDA_AUTO_ACTIVATE:-1}" != "1" ]]; then
         return 0
@@ -201,10 +201,10 @@ llama_activate_conda() {
         return 0
     fi
 
-    # Save shell options and relax strict mode for external conda scripts.
-    # Conda activation scripts may reference unset variables or fail in ways
-    # that would kill our script under set -euo pipefail (e.g. conda's
-    # ~cuda-nvcc_activate.sh references NVCC_PREPEND_FLAGS without guarding).
+    # 保存 shell 选项，为外部 conda 脚本放宽严格模式。
+    # conda 激活脚本可能引用未设置变量，或在 set -euo pipefail
+    # 下导致脚本退出（例如 conda 的 ~cuda-nvcc_activate.sh
+    # 未做防护就直接引用 NVCC_PREPEND_FLAGS）。
     local prev_opts
     prev_opts=$(set +o)
     set +eu
@@ -213,7 +213,7 @@ llama_activate_conda() {
     source "$conda_sh"
 
     local env_name="${CONDA_ENV_NAME:-base}"
-    # Execute conda activate directly (not in a command substitution subshell, or env changes are lost)
+    # 直接执行 conda activate（不在命令替换子 shell 中执行，否则环境变更会丢失）
     local conda_err_file
     conda_err_file=$(mktemp "${TMPDIR:-/tmp}/conda_activate_err.XXXXXX" 2>/dev/null) || conda_err_file=""
     if [[ -n "$conda_err_file" ]]; then
@@ -225,7 +225,7 @@ llama_activate_conda() {
         fi
         rm -f "$conda_err_file"
     else
-        # Cannot create temp file, fall back to silent mode (no stderr capture)
+        # 无法创建临时文件，回退到静默模式（不捕获 stderr）
         if conda activate "$env_name" 2>/dev/null; then
             llama_ok "已激活 conda 环境: ${env_name}"
         else
@@ -233,18 +233,18 @@ llama_activate_conda() {
         fi
     fi
 
-    # Restore previous shell options
+    # 恢复之前的 shell 选项
     eval "$prev_opts" 2>/dev/null || true
 
     return 0
 }
 
 # --- 文件锁 --------------------------------------------------
-# Use dynamic file descriptor (auto FD_CLOEXEC) to prevent child processes from inheriting the lock
+# 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
 
 # Usage: _recover_stale_lock <lock_file>
-# Attempts to recover a stale lock. Returns 0 on success (LOCK_FD set), 1 on failure.
-# Internal helper - called only by llama_acquire_lock.
+# 尝试恢复残留锁。成功返回 0（设置 LOCK_FD），失败返回 1。
+# 内部辅助函数 — 仅由 llama_acquire_lock 调用。
 _recover_stale_lock() {
     local lock_file="$1"
     local holder_pid
@@ -272,13 +272,13 @@ _recover_stale_lock() {
 
 # Usage: llama_acquire_lock [lock_file] — returns 0 on success, 1 if lock held
 llama_acquire_lock() {
-    local lock_file="${1:-$LOCK_FILE}"  # default to script-level LOCK_FILE
+    local lock_file="${1:-$LOCK_FILE}"  # 默认使用脚本级 LOCK_FILE
     if [[ -z "$lock_file" ]]; then
         llama_err "未指定锁文件路径"
         return 1
     fi
 
-    # Ensure lock file directory exists
+    # 确保锁文件目录存在
     local lock_dir
     lock_dir=$(dirname "$lock_file")
     if [[ ! -d "$lock_dir" ]]; then
@@ -289,7 +289,7 @@ llama_acquire_lock() {
     exec {fd}>>"$lock_file"
 
     if ! flock -n "$fd"; then
-        # Lock is held — read PID from file for diagnostics only after flock fails
+        # 锁被占用 — 仅在 flock 失败后从文件读取 PID 用于诊断
         local holder_pid
         holder_pid=$(cat "$lock_file" 2>/dev/null || true)
         local holder_cmd
@@ -311,26 +311,26 @@ llama_acquire_lock() {
 }
 
 # Usage: llama_release_lock
-# Closes the lock file descriptor
+# 关闭锁文件描述符
 llama_release_lock() {
     if [[ -n "${LOCK_FD:-}" ]]; then
         exec {LOCK_FD}>&- 2>/dev/null || true
         unset LOCK_FD
     fi
-    # Lock files must not be deleted — flock operates on inodes, not filenames.
-    # Deleting while another process is waiting would cause it to lock a deleted inode.
+    # 锁文件不可删除 — flock 基于 inode 而非文件名操作。
+    # 当另一个进程正在等待时删除文件，会导致其锁定已删除的 inode。
 }
 
 # --- 磁盘空间检查 --------------------------------------------
 # Usage: llama_check_disk_space <path> [min_gb]
-# Returns 0 if sufficient space, 1 otherwise
+# 空间充足返回 0，不足返回 1
 llama_check_disk_space() {
     local path="$1"
     local min_gb="${2:-${MIN_FREE_DISK_GB:-10}}"
 
     if [[ ! -d "$path" ]]; then
         llama_warn "无法检查磁盘空间：路径不存在 $path"
-        return 0  # Non-blocking, warn only
+    return 0  # 不阻塞，仅警告
     fi
 
     local available_kb
@@ -354,25 +354,25 @@ llama_check_disk_space() {
 
 # --- 信号陷阱管理 --------------------------------------------
 # Usage: llama_setup_trap <cleanup_command>
-# Sets up SIGINT and SIGTERM handlers
+# 注册 SIGINT 和 SIGTERM 处理函数
 llama_setup_trap() {
     local cleanup_cmd="$1"
     if [[ -z "$cleanup_cmd" ]]; then
         return 1
     fi
-    # shellcheck disable=SC2064  # Intentional: expand $cleanup_cmd at definition time, not signal time
+    # shellcheck disable=SC2064  # 有意为之：在定义时展开 $cleanup_cmd，而非信号触发时
     trap "$cleanup_cmd" SIGINT SIGTERM
 }
 
 # Usage: llama_cleanup_trap
-# Resets signal handlers to default
+# 将信号处理函数重置为默认值
 llama_cleanup_trap() {
     trap - SIGINT SIGTERM
 }
 
 # --- 网络上下文包装 ------------------------------------------
 # Usage: llama_with_network_context <description> <command> [args...]
-# Runs a command with network error context
+# 在网络错误上下文中运行命令
 llama_with_network_context() {
     local desc="$1"
     shift
@@ -388,14 +388,14 @@ llama_with_network_context() {
 
 # --- Git 辅助 ------------------------------------------------
 # Usage: llama_is_full_commit_sha <string>
-# Returns 0 if the argument is a full 40-char hex commit SHA, 1 otherwise.
+# 参数为完整 40 字符十六进制 commit SHA 时返回 0，否则返回 1。
 llama_is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
 
 # Usage: llama_check_build_health
-# Checks if the current build is complete and matches the current source commit.
-# Returns 0 = build healthy, 1 = build missing or stale.
+# 检查当前构建是否完整且与当前源码 commit 匹配。
+# 返回 0 = 构建健康，1 = 构建缺失或过期。
 llama_check_build_health() {
-    # Guard: ensure config.sh has been sourced
+    # 前置检查：确保 config.sh 已被 source
     if [[ -z "${LLAMA_CPP_SRC:-}" ]]; then
         return 1
     fi
@@ -403,13 +403,13 @@ llama_check_build_health() {
     if [[ ! -d "$bin_dir" ]]; then
         return 1
     fi
-    # Check that critical binaries exist and are executable
+    # 检查关键二进制文件是否存在且可执行
     for binary in "${REQUIRED_BINARIES[@]}"; do
         if [[ ! -x "${bin_dir}/${binary}" ]]; then
             return 1
         fi
     done
-    # Check that build stamp file exists and matches current source commit
+    # 检查构建标记文件是否存在且与当前源码 commit 匹配
     local build_stamp="${LLAMA_CPP_SRC}/build/.build-stamp"
     local current_head
     current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
@@ -420,19 +420,19 @@ llama_check_build_health() {
             return 0
         fi
     fi
-    # No stamp file or mismatch means build dir may be from a different version
+    # 无标记文件或不匹配意味着构建目录可能来自不同版本
     return 1
 }
 
 # --- 跨平台文件大小 ------------------------------------------
 # Usage: llama_file_size <path>
-# Returns file size in bytes, or empty string on error
+# 返回文件大小（字节数），出错时返回空字符串
 llama_file_size() {
     local path="$1"
     if [[ ! -f "$path" ]]; then
         return 1
     fi
-    # Prefer GNU stat, then fall back to BSD stat
+    # 优先使用 GNU stat，然后回退到 BSD stat
     local size
     size=$(stat -c %s "$path" 2>/dev/null) || \
     size=$(stat -f%z "$path" 2>/dev/null) || \
@@ -441,12 +441,12 @@ llama_file_size() {
 }
 
 # --- 可读文件大小 --------------------------------------------
-# Byte constants for llama_human_size
+# llama_human_size 的字节常量
 readonly _LLAMA_BYTES_KIB=1024
 readonly _LLAMA_BYTES_MIB=1048576
 readonly _LLAMA_BYTES_GIB=1073741824
 # Usage: llama_human_size <bytes>
-# Converts byte count to human-readable format (KiB/MiB/GiB)
+# 将字节数转换为人类可读格式（KiB/MiB/GiB）
 llama_human_size() {
     local bytes="$1"
     if ((bytes >= _LLAMA_BYTES_GIB)); then
@@ -466,7 +466,7 @@ llama_human_size() {
 
 # --- 退出辅助 ------------------------------------------------
 # Usage: llama_cd_back
-# Returns to orig_dir safely. Designed for update.sh error paths.
+# 安全返回 orig_dir。为 update.sh 错误路径设计。
 llama_cd_back() {
     if [[ -z "${orig_dir:-}" ]]; then
         return 0
@@ -500,16 +500,16 @@ llama_safe_exit() {
 # Usage: llama_return_or_exit <exit_code>
 llama_return_or_exit() {
     local code="$1"
-    # In source context: return succeeds. In script context: return fails, fall back to exit.
+    # source 上下文中：return 成功。脚本上下文中：return 失败，回退到 exit。
     { return "$code"; } 2>/dev/null || exit "$code"
 }
 
 # --- 初始化/引用/帮助辅助 ------------------------------------
 # Usage: llama_init_script_dir
-# Initializes SCRIPT_DIR to the directory containing the calling script.
-# Sets and exports SCRIPT_DIR to the resolved absolute path.
+# 将 SCRIPT_DIR 初始化为调用脚本所在目录。
+# 设置并导出 SCRIPT_DIR 为解析后的绝对路径。
 llama_init_script_dir() {
-    # Do nothing if SCRIPT_DIR is already set (e.g., by build.sh/update.sh directly)
+    # SCRIPT_DIR 已设置时不做任何操作（例如由 build.sh/update.sh 直接设置）
     if [[ -v SCRIPT_DIR ]] && [[ -n "${SCRIPT_DIR:-}" ]]; then
         return 0
     fi
@@ -518,10 +518,10 @@ llama_init_script_dir() {
     export SCRIPT_DIR
 }
 
-# Help text labels follow the language policy defined at file top.
+# 帮助文本标签遵循文件顶部定义的语言策略。
 
 # Usage: llama_show_help <script_name> <description> [options] [examples]
-# Displays formatted help text to stdout with usage, description, options, and examples sections.
+# 向 stdout 输出格式化帮助文本，包含用法、描述、选项和示例节。
 llama_show_help() {
     local script_name="$1"
     local description="$2"
@@ -546,15 +546,15 @@ EOF
 }
 
 # Usage: llama_show_version
-# Prints the version string to stdout.
+# 向 stdout 输出版本字符串。
 llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
 }
 
 # Usage: llama_save_colors
-# Saves current color variable values for later restoration.
-# NOTE: run_env.sh contains an inline copy of this loop (color save section) because common.sh
-#       is not yet loaded when colors must be saved. Both copies must be kept in sync.
+# 保存当前颜色变量值，供后续恢复使用。
+# 注意：run_env.sh 包含此循环的内联副本（颜色保存部分），因为 common.sh
+#       在需要保存颜色时尚未加载。两份副本必须保持同步。
 llama_save_colors() {
     local cvar
     for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
@@ -563,7 +563,7 @@ llama_save_colors() {
 }
 
 # Usage: llama_restore_colors
-# Restores color variables saved by llama_save_colors. Cleans up temp vars.
+# 恢复 llama_save_colors 保存的颜色变量。清理临时变量。
 llama_restore_colors() {
     local cvar saved_var
     for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
@@ -587,7 +587,7 @@ llama_print_run_examples() {
 }
 
 # Usage: llama_run_silent <command> [args...]
-# Runs command without set -e, capturing output. On failure, prints output to stderr.
+# 在禁用 set -e 的情况下运行命令并捕获输出。失败时将输出发送到 stderr。
 llama_run_silent() {
     local ret
     local prev_opts

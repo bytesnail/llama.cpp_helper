@@ -1,14 +1,14 @@
 #!/bin/bash
 # ============================================================
-# build.sh — llama.cpp build script
-# Goal: enable both OpenBLAS (CPU) + CUDA (dual RTX 2080 Ti NVLink)
-# Hardware: Intel Xeon E5-2667 v4 (32 cores) / 251GB RAM
-#          2× RTX 2080 Ti 22GB (NVLink 2 links, sm_75)
-# Software: CUDA / OpenBLAS / GCC / Ninja (version requirements: see README)
+# build.sh — llama.cpp 构建脚本
+# 目标：同时启用 OpenBLAS（CPU）+ CUDA（双 RTX 2080 Ti NVLink）
+# 硬件：Intel Xeon E5-2667 v4（32 核）/ 251GB RAM
+#       2× RTX 2080 Ti 22GB（NVLink 2 链路，sm_75）
+# 软件：CUDA / OpenBLAS / GCC / Ninja（版本要求：见 README）
 # Usage: cd /path/to/llama.cpp_helper && bash build.sh
 # ============================================================
 
-# Enable strict mode only when executing normally (not when sourced for test extraction)
+# 仅在正常执行时启用严格模式（为测试提取而 source 时不启用）
 if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     set -euo pipefail
 fi
@@ -20,7 +20,7 @@ source "${SCRIPT_DIR}/common.sh"
 source "${SCRIPT_DIR}/config.sh"
 
 # --- 文件锁定 ------------------------------------------------
-# Skip setup code when sourced for test extraction
+# 为测试提取而 source 时跳过设置代码
 if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     BUILD_DIR="${LLAMA_CPP_SRC}/build"
     readonly BUILD_DIR
@@ -45,8 +45,8 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     trap '_cleanup_on_exit' EXIT
 fi
 
-# EXIT trap: ensures cleanup on llama_die→exit paths; _CLEANUP_DONE guard prevents
-# double-fire when SIGINT/SIGTERM (the _CLEANUP_DONE guard) and EXIT both trigger.
+# EXIT trap：确保 llama_die→exit 路径的清理；_CLEANUP_DONE 守卫防止
+# SIGINT/SIGTERM（_CLEANUP_DONE 守卫）和 EXIT 同时触发时的重复执行。
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
 _show_help() {
@@ -89,7 +89,7 @@ _detect_cuda_lib_dir() {
 # --- 验证辅助函数 --------------------------------------------
 
 # Usage: _verify_binary_exists <binary_name> <bin_dir>
-# Returns: 0=exists, 1=missing
+# 返回：0=存在, 1=缺失
 _verify_binary_exists() {
     local binary="$1"
     local bin_dir="$2"
@@ -199,16 +199,16 @@ _verify_build() {
     local bin_dir="${BUILD_DIR}/bin"
     local verify_binary="${REQUIRED_BINARIES[0]}"
 
-    # Check critical binaries
+    # 检查关键二进制文件
     for binary in "${REQUIRED_BINARIES[@]}"; do
         _verify_binary_exists "$binary" "$bin_dir" || errors=$((errors + 1))
     done
 
-    # Link checks (non-fatal)
+    # 链接检查（非致命）
     _verify_cuda_linking "$bin_dir" "$verify_binary"
     _verify_openblas_linking "$bin_dir" "$verify_binary"
 
-    # Verify binary executability
+    # 验证二进制文件可执行性
     llama_info "验证二进制文件可执行性："
     if "${bin_dir}/${verify_binary}" --version &>/dev/null; then
         llama_ok "${verify_binary} 可正常启动"
@@ -216,7 +216,7 @@ _verify_build() {
         llama_warn "${verify_binary} 启动验证失败"
     fi
 
-    # Runtime verification (non-fatal)
+    # 运行时验证（非致命）
     _verify_cuda_devices "$bin_dir" || true
     _verify_openblas_runtime "$bin_dir" "$verify_binary" || true
     return "$errors"
@@ -224,7 +224,7 @@ _verify_build() {
 
 # --- 主逻辑 --------------------------------------------------
 main() {
-incremental=0  # Script-level variable: trap handler cannot access main() locals
+incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     local jobs
     local gcc_path gxx_path cuda_lib_dir=""
     local -a cmake_extra_args
@@ -249,7 +249,7 @@ incremental=0  # Script-level variable: trap handler cannot access main() locals
     done
 
     # --- 前置检查 ------------------------------------------------
-    # Activate conda environment (if CUDA toolchain was installed via conda)
+    # 激活 conda 环境（如果 CUDA 工具链通过 conda 安装）
     llama_activate_conda
 
     llama_step "前置检查"
@@ -262,7 +262,7 @@ incremental=0  # Script-level variable: trap handler cannot access main() locals
         python3 "python3" \
         && llama_ok "构建工具检查通过" || llama_die "构建工具检查失败"
 
-    # ninja may be installed as ninja-build on Debian/Ubuntu
+    # ninja 在 Debian/Ubuntu 上可能以 ninja-build 名称安装
     if ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null; then
         llama_die "缺少 ninja 或 ninja-build"
     fi
@@ -285,19 +285,19 @@ incremental=0  # Script-level variable: trap handler cannot access main() locals
     jobs=$(llama_get_cpu_count)
     llama_detail "并行编译任务数: $jobs"
 
-    # Auto-detect GCC/G++ paths
+    # 自动检测 GCC/G++ 路径
     gcc_path=$(command -v gcc)
     gxx_path=$(command -v g++)
     llama_detail "C 编译器: $gcc_path"
     llama_detail "C++ 编译器: $gxx_path"
 
-    # CUDA RPATH workaround (b8940+): llama.cpp declares CUDA deps as PRIVATE,
-    # causing libcudart.so link failures on non-standard installs (e.g. Anaconda).
-    # Inject CUDA library path via CMAKE_BUILD_RPATH.
-    # TODO(upstream): llama.cpp b8940+ declares CUDA deps as PRIVATE, breaking
-    # non-standard CUDA installs. Remove this block + CMAKE_BUILD_RPATH once
-    # upstream fixes the visibility. Test: build without RPATH, run ldd on
-    # llama-cli — if libcudart resolves, this workaround is no longer needed.
+    # CUDA RPATH 临时方案（b8940+）：llama.cpp 将 CUDA 依赖声明为 PRIVATE，
+    # 导致非标准安装路径下 libcudart.so 链接失败（如 Anaconda）。
+    # 通过 CMAKE_BUILD_RPATH 注入 CUDA 库路径。
+    # TODO(upstream)：llama.cpp b8940+ 将 CUDA 依赖声明为 PRIVATE，导致
+    # 非标准 CUDA 安装失败。上游修复可见性后，移除此代码块 + CMAKE_BUILD_RPATH。
+    # 测试方法：构建时不设置 RPATH，对 llama-cli 运行 ldd —
+    # 如果 libcudart 能正确解析，则此临时方案不再需要。
     if cuda_lib_dir=$(_detect_cuda_lib_dir); then
         llama_detail "CUDA 库路径: $cuda_lib_dir"
     else
@@ -324,7 +324,7 @@ incremental=0  # Script-level variable: trap handler cannot access main() locals
 
     llama_info "运行 CMake 配置..."
 
-    # Conditionally add CUDA library RPATH (only when cuda_lib_dir is non-empty)
+    # 仅在 cuda_lib_dir 非空时添加 CUDA 库 RPATH
     if [[ -n "$cuda_lib_dir" ]]; then
         cmake_extra_args=("-DCMAKE_BUILD_RPATH=$cuda_lib_dir")
     else

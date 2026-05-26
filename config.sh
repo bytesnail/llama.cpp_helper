@@ -1,41 +1,41 @@
 #!/bin/bash
 # ============================================================
-# config.sh — centralized shared paths and constants
+# config.sh — 集中管理共享路径和常量
 # Usage: source /path/to/llama.cpp_helper/config.sh
 # ============================================================
 
-# Prevent direct execution
+# 防止直接执行
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "[WARN] 本文件应当被 source，而非直接执行" >&2
     echo "用法: source ${BASH_SOURCE[0]}" >&2
     exit 1
 fi
 
-# Prevent duplicate source
+# 防止重复 source
 _LLAMA_CONFIG_SOURCED=${_LLAMA_CONFIG_SOURCED:-0}
 if [[ "$_LLAMA_CONFIG_SOURCED" -eq 1 ]]; then
     return 0 2>/dev/null || true
 fi
 _LLAMA_CONFIG_SOURCED=1
 
-# Overridable via environment variable; defaults to llama.cpp adjacent to this project
+# 可通过环境变量覆盖；默认为与本项目相邻的 llama.cpp 目录
 _LLAMA_PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly _LLAMA_PROJECT_ROOT
 LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-${_LLAMA_PROJECT_ROOT}/../llama.cpp}"
 
-# Repository info
+# 仓库信息
 REPO="ggml-org/llama.cpp"
 readonly REPO
 REPO_URL="https://github.com/ggml-org/llama.cpp"
 readonly REPO_URL
 
-# Resource limits and paths
+# 资源限制和路径
 MIN_FREE_DISK_GB=10
 readonly MIN_FREE_DISK_GB
 LOCK_FILE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock"
 readonly LOCK_FILE
 
-# Build configuration (overridable via environment)
+# 构建配置（可通过环境变量覆盖）
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES:-75}"
 CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS:---threads=0}"
@@ -45,15 +45,15 @@ GGML_NATIVE="${GGML_NATIVE:-ON}"
 GGML_BLAS="${GGML_BLAS:-ON}"
 GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
 
-# conda configuration
-CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=skip, 1=auto-activate
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # conda environment name to activate
+# conda 配置
+CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境名称
 
-# Network timeout configuration (overridable via environment)
-CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # seconds; update.sh HTTP connection timeout
-CURL_MAX_TIME="${CURL_MAX_TIME:-30}"                 # seconds; update.sh HTTP max request time
-# Critical binaries (used by build verification and health checks)
+# 网络超时配置（可通过环境变量覆盖）
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # 秒；update.sh HTTP 连接超时
+CURL_MAX_TIME="${CURL_MAX_TIME:-30}"                 # 秒；update.sh HTTP 最大请求时间
+# 关键二进制文件（用于构建验证和健康检查）
 declare -ar REQUIRED_BINARIES=("llama-cli" "llama-server")
-# Version number
+# 版本号
 LLAMA_HELPER_VERSION="1.0.0"
 readonly LLAMA_HELPER_VERSION

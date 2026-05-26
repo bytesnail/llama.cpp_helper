@@ -1,25 +1,25 @@
 #!/bin/bash
 # ============================================================
-# update.sh — llama.cpp one-click update script
-# Features: query GitHub latest release → fetch → build
+# update.sh — llama.cpp 一键更新脚本
+# 功能：查询 GitHub 最新发布版本 → 拉取 → 构建
 # Usage: cd /path/to/llama.cpp_helper && bash update.sh [tag|commit]
 # ============================================================
 
-# Enable strict mode only when executing normally (not when sourced for test extraction)
+# 仅在正常执行时启用严格模式（为测试提取而 source 时不启用）
 if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     set -euo pipefail
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 readonly SCRIPT_DIR
-# Note: SCRIPT_DIR is initialized inline here because source common.sh needs it.
-# llama_init_script_dir() exists but is only used when SCRIPT_DIR cannot be resolved early (e.g. run_env.sh).
+# 注意：此处内联初始化 SCRIPT_DIR，因为 source common.sh 需要它。
+# llama_init_script_dir() 存在但仅在无法提前解析 SCRIPT_DIR 时使用（如 run_env.sh）。
 source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
 
 # --- 文件锁定 ------------------------------------------------
-# Skip setup code when sourced for test extraction
+# 为测试提取而 source 时跳过设置代码
 if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     llama_acquire_lock || llama_die "无法获取文件锁"
 fi
@@ -39,7 +39,7 @@ orig_dir=""
 target_version=""
 release_short=""
 need_source_update=1
-skip_update=0  # Set by _resolve_target — skip update when no action needed
+skip_update=0  # 由 _resolve_target 设置 — 无需操作时跳过更新
 actual_commit=""
 actual_tag=""
 
@@ -59,7 +59,7 @@ _show_help() {
 
 # --- 工具函数 ------------------------------------------------
 
-# Save current state for rollback
+# 保存当前状态用于回滚
 # Usage: _save_state
 _save_state() {
     current_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
@@ -73,7 +73,7 @@ _save_state() {
     fi
 }
 
-# Roll back to previous state
+# 回滚到之前的状态
 # Usage: _rollback
 _rollback() {
     if [[ -z "${current_commit:-}" ]]; then
@@ -87,7 +87,7 @@ _rollback() {
         llama_err "git checkout 失败: 无法恢复到 ${current_short}"
         failed=1
     fi
-    # Clean up old submodule leftovers that may appear after rollback
+    # 清理回滚后可能出现的旧子模块残留
     if [[ "$failed" -eq 0 ]]; then
         _cleanup_stale_submodules
     fi
@@ -98,12 +98,12 @@ _rollback() {
     if [[ "$failed" -eq 0 ]]; then
         llama_ok "已回滚到 ${current_short}"
     fi
-    # Branch restoration is independent of checkout/submodule success: even if
-    # rollback partially failed, restoring the original branch name helps the
-    # user recover manually (detached HEAD is harder to reason about).
+    # 分支恢复独立于 checkout/子模块操作的成功与否：即使回滚部分失败，
+    # 恢复原始分支名也有助于用户手动恢复
+    # （detached HEAD 更难理解）。
     if [[ -n "${current_branch:-}" ]]; then
         if git -C "$LLAMA_CPP_SRC" checkout "$current_branch" --quiet 2>/dev/null; then
-            :  # branch restored successfully
+            :  # 分支已恢复
         else
             llama_warn "无法恢复到原始分支: ${current_branch}（当前处于 detached HEAD）"
         fi
@@ -111,8 +111,8 @@ _rollback() {
     return "$failed"
 }
 
-# Interrupt recovery trap — restore pre-update state on SIGINT/SIGTERM
-# llama_safe_exit 130: 130 = 128 + 2 (SIGINT standard exit code)
+# 中断恢复 trap — 在 SIGINT/SIGTERM 时恢复更新前状态
+# llama_safe_exit 130：130 = 128 + 2（SIGINT 标准退出码）
 # Usage: _cleanup_on_interrupt
 _cleanup_on_interrupt() {
     llama_warn "更新被中断，正在恢复..."
@@ -151,7 +151,7 @@ _cleanup_stale_submodules() {
                 rm -rf "$git_modules_dir"
                 llama_detail "清理 .git/modules: ${mod_dir}"
             fi
-            ((stale_count++)) || true  # || true: ((0)) is exit code 1 under set -e
+            ((stale_count++)) || true  # || true：set -e 下 ((0)) 退出码为 1
         fi
     done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
 
@@ -161,7 +161,7 @@ _cleanup_stale_submodules() {
 }
 
 # Usage: _json_field <field_name>
-# Extracts a JSON field using Python. Input is piped via stdin.
+# 使用 Python 提取 JSON 字段。输入通过 stdin 管道传入。
 _json_field() {
     python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"
 }
@@ -237,7 +237,7 @@ _fetch_latest_release_curl() {
         return 1
     fi
 
-    # Use stdin redirection to avoid path injection into Python strings
+    # 使用 stdin 重定向，避免路径注入到 Python 字符串中
     release_tag=$(_json_field tag_name < "$tmp") || return 1
     release_commit=$(_json_field target_commitish < "$tmp") || return 1
     release_date=$(_json_field published_at < "$tmp") || return 1
@@ -294,7 +294,7 @@ _check_local_repo() {
 
     orig_dir="$(pwd)"
     cd "$LLAMA_CPP_SRC" >/dev/null
-    # Subsequent functions run git commands without -C, relying on this CWD.
+    # 后续函数运行 git 命令时不带 -C，依赖此工作目录。
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
         git status --short
@@ -302,7 +302,7 @@ _check_local_repo() {
         llama_die "存在未提交的更改，请先处理后再更新"
     fi
 
-    # Check for uncommitted changes in submodules
+    # 检查子模块中的未提交更改
     if git submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null | grep -q 'DIRTY'; then
         llama_err "子模块中存在未提交的更改，请先处理后再更新:"
         git submodule foreach 'git status --short' 2>/dev/null || true
@@ -312,7 +312,7 @@ _check_local_repo() {
 
     _save_state
 
-    # Set up interrupt recovery trap (function defined at top level)
+    # 设置中断恢复 trap（函数在顶层定义）
     llama_setup_trap _cleanup_on_interrupt
 
     local actual_remote
@@ -362,7 +362,7 @@ _resolve_target() {
         llama_ok "查询成功"
     fi
 
-    # Display version info
+    # 显示版本信息
     if [[ ${#release_commit} -ge 7 ]]; then
         release_short="${release_commit:0:7}"
     elif [[ -n "${release_commit:-}" ]]; then
@@ -381,7 +381,7 @@ _resolve_target() {
         llama_detail "发布页面:    ${release_url}"
     fi
 
-    # Version comparison
+    # 版本对比
     llama_info "对比版本..."
     need_source_update=1
     if [[ "${current_tag}" = "${release_tag}" ]]; then
@@ -396,7 +396,7 @@ _resolve_target() {
     fi
 
     if [[ "$need_source_update" -eq 0 ]]; then
-        # Source does not need update, check if build is intact
+        # 源码无需更新，检查构建是否完整
         if llama_check_build_health; then
             llama_ok "当前构建完整且与源码匹配，无需任何操作！"
             skip_update=1
@@ -418,7 +418,7 @@ _update_source() {
         llama_die "从远程仓库拉取失败"
     }
 
-    # Try to fetch specific tag (if it's a tag)
+    # 尝试拉取特定标签（如果是标签）
     if git ls-remote --tags origin "refs/tags/${release_tag}" 2>/dev/null | grep -q "refs/tags/${release_tag}"; then
         local tag_fetch_rc=0
         git fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" || tag_fetch_rc=$?
@@ -456,10 +456,10 @@ _update_source() {
     fi
 
     llama_ok "源码已更新到 ${release_tag} (${actual_commit:0:7})"
-    # Clean up old version leftover submodule directories
+    # 清理旧版本遗留的子模块目录
     _cleanup_stale_submodules
 
-    # Sync current version submodules
+    # 同步当前版本的子模块
     llama_info "同步子模块..."
     if [[ -f ".gitmodules" ]]; then
         if ! git submodule update --init --recursive --quiet; then
@@ -482,8 +482,8 @@ _build_with_rollback() {
         llama_step "开始重新构建..."
     fi
 
-    # Release lock before spawning build.sh — build.sh acquires its own lock,
-    # and holding both would create a deadlock (same lock file, same UID).
+    # 在启动 build.sh 前释放锁 — build.sh 会获取自己的锁，
+    # 同时持有两个锁会导致死锁（同一锁文件、同一 UID）。
     llama_release_lock
     llama_run_silent bash "$BUILD_SCRIPT"
     local build_status=$?
@@ -516,7 +516,7 @@ _build_with_rollback() {
         llama_cd_back
         llama_safe_exit 0
     fi
-    # Build succeeded
+    # 构建成功
     _print_success_summary "${need_source_update}" "${current_short}" "${release_tag}" "${release_date:-}"
 
     llama_cd_back
@@ -527,7 +527,7 @@ _build_with_rollback() {
 main() {
     llama_step "llama.cpp 一键更新脚本"
     _parse_args "$@"
-    llama_activate_conda  # Activate conda environment (ensure python3/git etc. are available)
+    llama_activate_conda  # 激活 conda 环境（确保 python3/git 等可用）
     _check_local_repo
     _resolve_target
     if [[ "${skip_update:-0}" -eq 1 ]]; then
