@@ -149,7 +149,7 @@ _verify_cuda_linking() {
 
 # Usage: _verify_openblas_linking <bin_dir> [binary]
 _verify_openblas_linking() {
-    _verify_linking "${1:-}" "${2:-llama-cli}" "openblas|blas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
+    _verify_linking "${1:-}" "${2:-llama-cli}" "libopenblas|libblas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
 }
 
 # Usage: _verify_cuda_devices <bin_dir>
