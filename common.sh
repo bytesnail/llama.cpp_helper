@@ -270,7 +270,8 @@ _recover_stale_lock() {
     return 0
 }
 
-# Usage: llama_acquire_lock [lock_file] — returns 0 on success, 1 if lock held
+# Usage: llama_acquire_lock [lock_file]
+# 返回：成功返回 0（设置 LOCK_FD），锁被占用返回 1。
 llama_acquire_lock() {
     local lock_file="${1:-$LOCK_FILE}"  # 默认使用脚本级 LOCK_FILE
     if [[ -z "$lock_file" ]]; then
