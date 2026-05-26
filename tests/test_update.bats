@@ -192,3 +192,17 @@ load test_helper
     restored_head=$(git -C "$fake_repo" rev-parse HEAD)
     [ "$restored_head" = "$first_commit" ]
 }
+
+# --- No-argument behavior ---
+@test "update.sh without args shows error when repo missing (not just banner)" {
+    # This test verifies that the script doesn't silently exit after the banner
+    # (regression test for set -u crash in conda activation)
+    run bash "${BATS_TEST_DIRNAME}/../update.sh"
+    # Should exit non-zero
+    [ "$status" -ne 0 ]
+    # Should show the banner
+    [[ "$output" =~ "llama.cpp 一键更新脚本" ]]
+    # Should show more than just the banner (error messages or progress)
+    # If the bug were present, only the banner would appear before silent exit
+    [[ "$output" =~ "检查前置条件" || "$output" =~ "不存在" || "$output" =~ "ERROR" || "$output" =~ "失败" ]]
+}

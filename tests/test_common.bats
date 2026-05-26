@@ -703,3 +703,80 @@ EOF
     [ -n "${LOCK_FD:-}" ]
     llama_release_lock
 }
+
+# --- conda Activation Resilience (set -eu) ---
+@test "llama_activate_conda survives set -u when conda script references unset variable" {
+    local mock_setu="${TEST_TMPDIR}/mock_setu"
+    mkdir -p "${mock_setu}/etc/profile.d"
+    mkdir -p "${mock_setu}/bin"
+    echo '#!/bin/bash' > "${mock_setu}/bin/conda"
+    chmod +x "${mock_setu}/bin/conda"
+    # Simulate conda activation script that references an unset variable
+    # (like ~cuda-nvcc_activate.sh does with NVCC_PREPEND_FLAGS)
+    cat > "${mock_setu}/etc/profile.d/conda.sh" <<'CONDAEOF'
+conda() {
+    if [[ "$1" == "activate" ]]; then
+        : ${UNSET_VAR}
+        return 0
+    fi
+}
+CONDAEOF
+    CONDA_EXE="${mock_setu}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_activate_conda
+        echo SURVIVED
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "SURVIVED" ]]
+}
+
+@test "llama_activate_conda survives set -e when conda activate fails" {
+    local mock_sete="${TEST_TMPDIR}/mock_sete"
+    mkdir -p "${mock_sete}/etc/profile.d"
+    mkdir -p "${mock_sete}/bin"
+    echo '#!/bin/bash' > "${mock_sete}/bin/conda"
+    chmod +x "${mock_sete}/bin/conda"
+    # Simulate conda.sh where conda activate returns non-zero
+    cat > "${mock_sete}/etc/profile.d/conda.sh" <<'CONDAEOF'
+conda() {
+    if [[ "$1" == "activate" ]]; then
+        return 1
+    fi
+}
+CONDAEOF
+    CONDA_EXE="${mock_sete}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_activate_conda
+        echo SURVIVED
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "SURVIVED" ]]
+    [[ "$output" =~ "conda 环境激活失败" ]]
+}
+
+@test "llama_activate_conda restores set -u after conda activation" {
+    local mock_restore="${TEST_TMPDIR}/mock_restore"
+    mkdir -p "${mock_restore}/etc/profile.d"
+    mkdir -p "${mock_restore}/bin"
+    echo '#!/bin/bash' > "${mock_restore}/bin/conda"
+    chmod +x "${mock_restore}/bin/conda"
+    cat > "${mock_restore}/etc/profile.d/conda.sh" <<'CONDAEOF'
+conda() {
+    if [[ "$1" == "activate" ]]; then
+        return 0
+    fi
+}
+CONDAEOF
+    CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_activate_conda
+        # After llama_activate_conda returns, set -u should be active again
+        # Verify by referencing an unset variable — should fail
+        : \${_LLAMA_TEST_UNSET_VAR_XYZ}
+    "
+    # Under set -u, referencing an unset variable should cause exit code > 0
+    [ "$status" -ne 0 ]
+}

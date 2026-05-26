@@ -191,6 +191,14 @@ llama_activate_conda() {
         return 0
     fi
 
+    # Save shell options and relax strict mode for external conda scripts.
+    # Conda activation scripts may reference unset variables or fail in ways
+    # that would kill our script under set -euo pipefail (e.g. conda's
+    # ~cuda-nvcc_activate.sh references NVCC_PREPEND_FLAGS without guarding).
+    local prev_opts
+    prev_opts=$(set +o)
+    set +eu
+
     # shellcheck source=/dev/null
     source "$conda_sh"
 
@@ -214,6 +222,9 @@ llama_activate_conda() {
             llama_warn "conda 环境激活失败: ${env_name}"
         fi
     fi
+
+    # Restore previous shell options
+    eval "$prev_opts" 2>/dev/null || true
 
     return 0
 }
