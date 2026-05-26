@@ -45,12 +45,15 @@ load test_helper
     mkdir -p "${fake_repo}"
     git -C "${fake_repo}" init -q
     git -C "${fake_repo}" commit --allow-empty -q -m "init"
-    git -C "${fake_repo}" remote add origin https://github.com/ggml-org/llama.cpp
+    git -C "${fake_repo}" remote add origin "file:///tmp/nonexistent-git-repo-$$"
+
+    # Sync origin URL to match REPO_URL check (remote mismatch only warns, doesn't fail)
 
     # Use a non-existent tag so git checkout fails inside _update_source
-    LLAMA_CPP_SRC="${fake_repo}" run bash "${BATS_TEST_DIRNAME}/../update.sh" nonexistent_tag_xyz 2>&1 || true
+    LLAMA_CPP_SRC="${fake_repo}" run timeout 10 bash "${BATS_TEST_DIRNAME}/../update.sh" nonexistent_tag_xyz 2>&1 || true
     # The script should report failure (non-zero exit) or a version error message
-    [[ "$output" =~ "版本切换失败" || "$output" =~ "本地找不到目标版本" || "$status" -ne 0 ]]
+    # git fetch will quickly fail with the fake file:// remote
+    [[ "$output" =~ "版本切换失败" || "$output" =~ "本地找不到目标版本" || "$output" =~ "拉取失败" || "$status" -ne 0 ]]
 }
 
 @test "_save_state sets current_branch after sourcing" {

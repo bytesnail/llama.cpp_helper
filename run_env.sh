@@ -9,7 +9,7 @@
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "[WARN] 本脚本应当使用 source 执行，而非直接运行" >&2
     echo "用法: source ${BASH_SOURCE[0]} [选项]" >&2
-    echo "" >&2
+    echo >&2
     echo "直接执行不会在当前 shell 中设置环境变量。" >&2
     exit 1
 fi
@@ -28,7 +28,7 @@ _LLAMA_RUN_ENV_SOURCED=1
 # Save color variables — must be done before sourcing common.sh (common.sh would overwrite them)
 # Note: inline code is used instead of llama_save_colors() because that function is in common.sh
 #       and common.sh has not been loaded yet. Functionally equivalent to llama_save_colors() in common.sh.
-# NOTE: common.sh L524-528 contains llama_save_colors(). Both copies must be kept in sync.
+# NOTE: common.sh L556-565 contains llama_save_colors(). Both copies must be kept in sync.
 for v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${v}" '%s' "${!v-}"
 done
@@ -80,7 +80,7 @@ _show_help() {
 # Usage: _show_env_vars
 _show_env_vars() {
     local var
-    echo ""
+    echo
     echo "环境变量:"
     # Use sort for deterministic output order
     for var in $(_sorted_env_var_names); do
@@ -93,7 +93,7 @@ _show_env_vars() {
         else
             echo "    当前值: (未设置)"
         fi
-        echo ""
+        echo
     done
 }
 

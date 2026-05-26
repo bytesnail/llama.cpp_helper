@@ -14,6 +14,7 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+readonly SCRIPT_DIR
 source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
@@ -45,7 +46,7 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 # EXIT trap: ensures cleanup on llama_die→exit paths; _CLEANUP_DONE guard prevents
-# double-fire when SIGINT/SIGTERM (L34) and EXIT both trigger.
+# double-fire when SIGINT/SIGTERM (L35) and EXIT both trigger.
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
 _show_help() {
@@ -373,9 +374,9 @@ incremental=0  # Script-level variable: trap handler cannot access main() locals
         llama_die "构建验证失败，${verify_exit} 个错误"
     fi
     git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || llama_warn "无法写入构建标记"
-    echo ""
+    echo
     llama_ok "构建完成！"
-    echo ""
+    echo
     llama_print_run_examples "${BUILD_DIR}/bin"
     return 0
 }

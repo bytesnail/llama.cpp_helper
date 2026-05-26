@@ -11,6 +11,7 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+readonly SCRIPT_DIR
 # Note: SCRIPT_DIR is initialized inline here because source common.sh needs it.
 # llama_init_script_dir() exists but is only used when SCRIPT_DIR cannot be resolved early (e.g. run_env.sh).
 source "${SCRIPT_DIR}/common.sh"
@@ -172,7 +173,7 @@ _print_success_summary() {
     local target_ver="$3"
     local release_date="$4"
 
-    echo ""
+    echo
     echo "=========================================="
     if [[ "$source_updated" -eq 1 ]]; then
         echo "  llama.cpp 更新并构建完成！"
@@ -180,7 +181,7 @@ _print_success_summary() {
         echo "  构建完成！"
     fi
     echo "=========================================="
-    echo ""
+    echo
     if [[ "$source_updated" -eq 1 ]]; then
         echo "  更新: ${current_ver} → ${target_ver}"
         echo "  版本: ${target_ver}"
@@ -191,7 +192,7 @@ _print_success_summary() {
         echo "  版本: ${current_ver}"
         echo "  状态: 重新构建完成"
     fi
-    echo ""
+    echo
     llama_print_run_examples "${LLAMA_CPP_SRC}/build/bin"
 }
 

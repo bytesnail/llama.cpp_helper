@@ -1,12 +1,12 @@
 # PROJECT KNOWLEDGE BASE
 
 **生成时间：** 2026-05-26
-**提交：** 7e574f5（审计后）
+**提交：** e9d1b82（审计后）
 **分支：** main
 
 ## 概述
 
-llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1777 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 126 项测试。
+llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1813 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 130 项测试。
 
 用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。本文档面向 AI 代理和开发者。
 
@@ -20,9 +20,9 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | 层 | 文件 | LOC | 职责 |
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 580 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 387/547/203 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
-| 测试层 | `tests/` | 1146 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
+| 工具层 | `common.sh` | 614 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 388/548/203 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
+| 测试层 | `tests/` | 1243 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
 ## 何处查找
 
@@ -103,7 +103,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 
 ## 注意事项
 
-- **临时方案**：`build.sh` L293-307 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
+- **临时方案**：`build.sh` L294-308 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
 - **测试未覆盖端到端构建**：`build.sh` 和 `update.sh` 的测试只覆盖 CLI 接口（`--help`, `--version`, 参数解析），实际构建/更新行为不在此项目的测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行

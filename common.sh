@@ -39,6 +39,18 @@ else
 fi
 
 # --- 日志 ----------------------------------------------------
+# Usage: llama_detail <message>
+# Logs a detail message to stdout with blue arrow prefix.
+# Usage: llama_step <header>
+# Logs a bold section header to stdout.
+# Usage: llama_err <message>
+# Logs an error message to stderr with red [ERROR] prefix.
+# Usage: llama_warn <message>
+# Logs a warning message to stdout with yellow [WARN] prefix.
+# Usage: llama_ok <message>
+# Logs a success message to stdout with green [OK] prefix.
+# Usage: llama_info <message>
+# Logs an informational message to stdout with cyan [INFO] prefix.
 llama_info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
 llama_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 llama_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -495,7 +507,14 @@ llama_return_or_exit() {
 }
 
 # --- 初始化/引用/帮助辅助 ------------------------------------
+# Usage: llama_init_script_dir
+# Initializes SCRIPT_DIR to the directory containing the calling script.
+# Sets and exports SCRIPT_DIR to the resolved absolute path.
 llama_init_script_dir() {
+    # Do nothing if SCRIPT_DIR is already set (e.g., by build.sh/update.sh directly)
+    if [[ -v SCRIPT_DIR ]] && [[ -n "${SCRIPT_DIR:-}" ]]; then
+        return 0
+    fi
     local caller="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
     SCRIPT_DIR="$(cd "$(dirname "$caller")" >/dev/null && pwd)"
     export SCRIPT_DIR
@@ -503,6 +522,8 @@ llama_init_script_dir() {
 
 # Help text labels follow the language policy defined at file top (L14-15).
 
+# Usage: llama_show_help <script_name> <description> [options] [examples]
+# Displays formatted help text to stdout with usage, description, options, and examples sections.
 llama_show_help() {
     local script_name="$1"
     local description="$2"
@@ -515,17 +536,19 @@ llama_show_help() {
   ${description}
 EOF
     if [[ -n "$options" ]]; then
-        echo ""
+        echo
         echo "选项:"
         echo "$options"
     fi
     if [[ -n "$examples" ]]; then
-        echo ""
+        echo
         echo "示例:"
         echo "$examples"
     fi
 }
 
+# Usage: llama_show_version
+# Prints the version string to stdout.
 llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
 }
