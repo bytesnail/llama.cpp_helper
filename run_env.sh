@@ -29,10 +29,10 @@ _LLAMA_RUN_ENV_SOURCED=1
 # 注意：使用内联代码而非 llama_save_colors()，因为该函数在 common.sh 中
 #       而 common.sh 尚未加载。功能上等价于 common.sh 中的 llama_save_colors()。
 # 注意：common.sh → llama_save_colors() — 功能等价。两份副本必须保持同步。
-for v in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-    printf -v "_LLAMA_SAVED_${v}" '%s' "${!v-}"
+for _llama_color_var in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+    printf -v "_LLAMA_SAVED_${_llama_color_var}" '%s' "${!_llama_color_var-}"
 done
-unset v
+unset _llama_color_var
 
 # 引导：查找并 source common.sh（共享辅助函数尚不可用）
 boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"

@@ -132,8 +132,8 @@ _verify_linking() {
     fi
     local ldd_output
     ldd_output=$(ldd "$bin_path" 2>/dev/null) || true
-    if echo "$ldd_output" | grep -qiE "$pattern"; then
-        echo "$ldd_output" | grep -iE "$pattern" | while IFS= read -r line; do
+    if grep -qiE "$pattern" <<< "$ldd_output"; then
+        grep -iE "$pattern" <<< "$ldd_output" | while IFS= read -r line; do
             llama_detail "$line"
         done
         llama_ok "${label} 链接正常"
@@ -163,7 +163,7 @@ _verify_cuda_devices() {
     fi
     local bench_output
     bench_output=$(LC_ALL=C "${bin_dir}/llama-bench" --help 2>&1 || true)
-    if echo "$bench_output" | grep -q "found [0-9]* CUDA devices"; then
+    if grep -q "found [0-9]* CUDA devices" <<< "$bench_output"; then
         echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
             llama_detail "$line"
         done

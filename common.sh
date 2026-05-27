@@ -49,12 +49,12 @@ fi
 # 向 stdout 输出绿色 [OK] 前缀的成功消息。
 # Usage: llama_info <message>
 # 向 stdout 输出青色 [INFO] 前缀的信息消息。
-llama_info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
-llama_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
-llama_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-llama_err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-llama_step()  { echo -e "\n${BOLD}=== $* ===${NC}"; }
-llama_detail() { echo -e "${BLUE}  →${NC} $*"; }
+llama_info()  { printf '%b\n' "${CYAN}[INFO]${NC} $*"; }
+llama_ok()    { printf '%b\n' "${GREEN}[OK]${NC} $*"; }
+llama_warn()  { printf '%b\n' "${YELLOW}[WARN]${NC} $*"; }
+llama_err()   { printf '%b\n' "${RED}[ERROR]${NC} $*" >&2; }
+llama_step()  { printf '%b\n' "\n${BOLD}=== $* ===${NC}"; }
+llama_detail() { printf '%b\n' "${BLUE}  →${NC} $*"; }
 
 # --- 前置条件检查 --------------------------------------------
 # Usage: llama_check_commands <cmd1> [pkg1] <cmd2> [pkg2] ...
@@ -300,7 +300,7 @@ llama_acquire_lock() {
         else
             exec {fd}>&- 2>/dev/null || true
             _recover_stale_lock "$lock_file"
-            return $?
+            return
         fi
         exec {fd}>&- 2>/dev/null || true
         return 1
@@ -485,9 +485,7 @@ llama_die() {
     if [[ -n "$msg" ]]; then
         llama_err "$msg"
     fi
-    llama_cleanup_trap
-    llama_release_lock
-    exit "$code"
+    llama_safe_exit "$code"
 }
 
 # Usage: llama_safe_exit [exit_code]

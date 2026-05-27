@@ -8,3 +8,6 @@
 *.bak
 *.orig
 *.log
+
+__pycache__/
+*.pyc

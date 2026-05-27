@@ -221,6 +221,8 @@ _fetch_latest_release_curl() {
     tmp=$(mktemp "${TMPDIR:-/tmp}/llama_release.XXXXXX.json")
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" RETURN
+    # 注意：RETURN trap 仅在函数正常返回时触发，不处理 SIGINT 等信号。
+    # 若函数被信号中断时 $tmp 尚未清理，属于低风险的临时文件残留。
 
     local http_code
     http_code=$(curl -sL --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \

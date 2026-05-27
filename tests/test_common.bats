@@ -54,6 +54,21 @@ teardown() {
     [[ "$output" =~ "detail text" ]]
 }
 
+@test "llama_info handles percent sign in message" {
+    run llama_info "100% done"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ '100% done' ]]
+}
+
+@test "llama_step output begins with leading newline" {
+    run llama_step "Phase"
+    [ "$status" -eq 0 ]
+    # 首行为空（llama_step 以 \n 开头产生前导空行）
+    [[ "$(echo "$output" | head -1)" == "" ]]
+    # 包含 === Phase ===
+    [[ "$output" =~ '=== Phase ===' ]]
+}
+
 # --- Prerequisite Checking ---
 @test "llama_check_commands succeeds when all commands exist" {
     run llama_check_commands bash "bash" cat "coreutils"
