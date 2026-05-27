@@ -2,7 +2,7 @@
 # ============================================================
 # common.sh — 共享工具函数库
 # 所有辅助脚本的共享工具
-# 要求：Bash >= 4.2（关联数组 declare -A，变量测试 [[ -v ]]）
+# 要求：Bash >= 4.2（变量测试 [[ -v ]]）
 # ============================================================
 
 # --- 防止重复 source -----------------------------------------
@@ -172,7 +172,6 @@ llama_activate_conda() {
             "${HOME}/miniconda3" \
             "${HOME}/anaconda3" \
             "${HOME}/miniforge3" \
-            "${HOME}/miniconda4" \
             "/opt/conda" \
             "/opt/miniconda3" \
             "/opt/anaconda3" \
@@ -331,7 +330,7 @@ llama_check_disk_space() {
 
     if [[ ! -d "$path" ]]; then
         llama_warn "无法检查磁盘空间：路径不存在 $path"
-    return 0  # 不阻塞，仅警告
+        return 0  # 不阻塞，仅警告
     fi
 
     local available_kb

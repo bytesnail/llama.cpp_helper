@@ -53,6 +53,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # 秒；update.sh HTTP 连接超时
 CURL_MAX_TIME="${CURL_MAX_TIME:-30}"                 # 秒；update.sh HTTP 最大请求时间
 # 关键二进制文件（用于构建验证和健康检查）
+# declare -ar 是 Bash 中声明只读数组的唯一方式（readonly 无法作用于数组）
 declare -ar REQUIRED_BINARIES=("llama-cli" "llama-server")
 # 版本号
 LLAMA_HELPER_VERSION="1.0.0"
