@@ -8,8 +8,8 @@ external-sources=true
 source-path=SCRIPTDIR
 
 # Warnings to exclude
-# SC2034/SC2119/SC2317 trigger on 0.10.0 as known false positives;
-# SC2312 is non-triggering on 0.10.0. All kept for older versions.
+# SC2034 triggers on 0.10.0 as a known false positive;
+# SC2119/SC2312/SC2317 are non-triggering on 0.10.0. All kept for older versions.
 # SC2034: config.sh vars used by sourcing scripts — false positive with external-sources
 # SC2119: llama_acquire_lock intentionally uses default LOCK_FILE (no args needed)
 # SC2312: command output captured into variable via $() — false positive when

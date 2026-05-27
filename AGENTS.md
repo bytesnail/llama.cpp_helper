@@ -1,14 +1,14 @@
 # 项目知识库
 
 **生成时间：** 2026-05-27
-**提交：** bb8f966
+**提交：** 7ba2833
 **分支：** main
 
 ## 概述
 
 llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1811 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 134 项测试。
 
-> 所有脚本均需 Bash >= 4.2（`declare -A` 关联数组：common.sh / update.sh / run_env.sh 均使用）。
+> 所有脚本均需 Bash >= 4.2（`declare -A` 关联数组：run_env.sh、update.sh（`local -A`）；`[[ -v ]]` 变量测试：common.sh、update.sh 使用）。
 
 用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。本文档面向 AI 代理和开发者。
 
@@ -28,8 +28,8 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 
 | 层 | 文件 | LOC | 职责 |
 |----|------|-----|------|
-| 配置层 | `config.sh` | 59 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 611 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
+| 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
+| 工具层 | `common.sh` | 610 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
 | 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 388/550/203 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
 | 测试层 | `tests/` | 1298 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
@@ -45,7 +45,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 | 测试辅助函数 | `tests/test_helper.bash` | setup/teardown + 共享 fixture |
 | ShellCheck 规则调整 | `.shellcheckrc` | 每条 disable 有注释说明原因 |
 
-> **ShellCheck 禁用说明：** `.shellcheckrc` 禁用规则 (SC2034/SC2119/SC2312/SC2317) 除 SC2312 外均在 0.10.0 触发，均为已知误报，保留以供旧版本兼容。
+> **ShellCheck 禁用说明：** `.shellcheckrc` 禁用规则 (SC2034/SC2119/SC2312/SC2317)，其中仅 SC2034 在 0.10.0 触发（已知误报），其余三条保留以供旧版本兼容。
 
 ## 命名约定
 

@@ -39,7 +39,7 @@
 | GCC / G++ ≥ 12.0 | C/C++ 编译器（GCC 12.x 已验证兼容 CUDA 13.0） |
 | CUDA Toolkit | 需 `nvcc` 可用（不强制特定版本） |
 | OpenBLAS | `libopenblas-dev` 开发包 |
-| Python 3 | JSON 解析（update.sh 使用） |
+| Python 3 | JSON 解析（update.sh）及 OpenBLAS 运行时验证（build.sh） |
 | `gh` | GitHub CLI（update.sh 优先使用，未安装时回退到 `curl`） |
 | Git | 源码管理 |
 | `curl` | HTTP 客户端（`gh` 未安装时 update.sh 使用） |
@@ -139,7 +139,7 @@ run_env.sh  ──source──> common.sh
 
 > 模块分层详见 [AGENTS.md](AGENTS.md#模块分层)。
 
-> `config.sh` 和 `common.sh` 由入口脚本 source，不可直接执行。`run_env.sh` 仅能通过 `source` 使用。
+> `run_env.sh` 仅能通过 `source` 使用（详见 [⚠️ 重要警告](#️-重要警告)）。
 
 ---
 
