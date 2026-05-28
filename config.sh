@@ -32,7 +32,7 @@ readonly REPO_URL
 # 资源限制和路径
 MIN_FREE_DISK_GB=10
 readonly MIN_FREE_DISK_GB
-LOCK_FILE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock"
+LOCK_FILE="${LOCK_FILE:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock}"
 readonly LOCK_FILE
 
 # 构建配置（可通过环境变量覆盖）

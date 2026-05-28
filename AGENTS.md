@@ -97,6 +97,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 4. **绝不在 Python 中嵌入字段名** — 使用 `sys.argv[1]` 传递字段名避免 Python 注入（参考 `_json_field` / `_verify_openblas_runtime`）
 5. **source 脚本绝不污染父 shell 颜色变量** — `run_env.sh` 使用内联代码保存颜色（等价于 llama_save_colors），然后调用 llama_restore_colors 恢复
 6. **绝不启用** `GGML_CUDA_ENABLE_UNIFIED_MEMORY` — 离散 GPU（RTX 2080 Ti）有害。仅集成 GPU 或 OOM 时手动启用
+7. **绝不在测试中修改生产环境的 llama.cpp 仓库** — 所有测试操作必须在 `tests/test_helper.bash` 创建的临时目录中进行。`_setup_tmpdir()` 自动创建 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它，`teardown` 时自动清理。测试需不同仓库时显式覆盖 `LLAMA_CPP_SRC`，但不得指向 `_LLAMA_PROJECT_ROOT/../llama.cpp`（生产路径）
 
 ## 安全特性
 
@@ -118,6 +119,7 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 
 - **临时方案**：`build.sh` L294-308 的 CUDA RPATH 检测是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题）。上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
+- **测试隔离机制**：`tests/test_helper.bash` 的 `_setup_tmpdir()` 为每个测试创建独立的 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它（覆盖 `config.sh` 的默认生产路径），确保测试绝不会触碰到生产环境 `../llama.cpp` 仓库。`_teardown_tmpdir` 在 `teardown` 时自动清理所有临时文件。新增测试欲操作 `llama.cpp` 仓库时应使用已导出的 `LLAMA_CPP_SRC`（指向临时仓库）或自行在 `TEST_TMPDIR` 下创建 fake repo — 绝对不要直接使用 `_LLAMA_PROJECT_ROOT/../llama.cpp`
 - **测试未覆盖端到端构建**：`build.sh` 和 `update.sh` 的测试只覆盖 CLI 接口（`--help`, `--version`, 参数解析），实际构建/更新行为不在此项目的测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行
 - **Bash 源文件扩展名**：测试辅助使用 `.bash`（`test_helper.bash`），不是 `.bats`——它是被 load 的库文件，不是测试文件
