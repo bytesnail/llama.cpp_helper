@@ -26,9 +26,9 @@ _LLAMA_RUN_ENV_SOURCED=1
 
 # 加载 common.sh
 # 保存颜色变量 — 必须在 source common.sh 之前完成（common.sh 会覆盖它们）
-# 注意：使用内联代码而非 llama_save_colors()，因为该函数在 common.sh 中
-#       而 common.sh 尚未加载。功能上等价于 common.sh 中的 llama_save_colors()。
-# 注意：common.sh → llama_save_colors() — 功能等价。两份副本必须保持同步。
+# 使用内联代码而非 llama_save_colors()（common.sh 的 llama_save_colors() 函数），因为 common.sh 尚未加载。
+# 两份副本必须保持同步：修改此处的变量列表时，需同步修改 common.sh 中的
+# llama_save_colors() 函数。
 for _llama_color_var in RED GREEN YELLOW CYAN BLUE BOLD NC; do
     printf -v "_LLAMA_SAVED_${_llama_color_var}" '%s' "${!_llama_color_var-}"
 done
@@ -39,6 +39,7 @@ boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 if [[ ! -f "${boot_dir}/common.sh" ]]; then
     # shellcheck disable=SC2317
     echo "[ERROR] 未找到 common.sh: ${boot_dir}/common.sh" >&2
+    unset boot_dir
     return 1 2>/dev/null || exit 1
 fi
 # shellcheck source=/dev/null
@@ -83,7 +84,7 @@ _show_env_vars() {
     echo
     echo "环境变量:"
     # 使用 sort 确保输出顺序确定性
-    for var in $(_sorted_env_var_names); do
+    while IFS= read -r var; do
         local info="${_LLAMA_RUN_ENV_VARS[$var]}"
         local desc="${info#*|}"
         echo "  ${var}"
@@ -94,7 +95,7 @@ _show_env_vars() {
             echo "    当前值: (未设置)"
         fi
         echo
-    done
+    done < <(_sorted_env_var_names)
 }
 
 # Usage: _sorted_env_var_names
@@ -161,7 +162,7 @@ main() {
 
     # 逐个设置环境变量
     local var info value desc
-    for var in $(_sorted_env_var_names); do
+    while IFS= read -r var; do
         info="${_LLAMA_RUN_ENV_VARS[$var]}"
         value="${info%|*}"
         desc="${info#*|}"
@@ -174,7 +175,7 @@ main() {
             llama_ok "${var}=${value}"
             llama_detail "${desc}"
         fi
-    done
+    done < <(_sorted_env_var_names)
 
     # --- 重要提示 ------------------------------------------------
     cat <<EOF

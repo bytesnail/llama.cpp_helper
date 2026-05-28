@@ -551,8 +551,9 @@ llama_show_version() {
 
 # Usage: llama_save_colors
 # 保存当前颜色变量值，供后续恢复使用。
-# 注意：run_env.sh 包含此循环的内联副本（颜色保存部分），因为 common.sh
-#       在需要保存颜色时尚未加载。两份副本必须保持同步。
+# 注意：run_env.sh 的内联颜色保存循环包含此循环的副本，因为 common.sh
+#       在需要保存颜色时尚未加载。两份副本必须保持同步：修改此处的变量列表
+#       时，需同步修改 run_env.sh 中的内联副本。
 llama_save_colors() {
     local cvar
     for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
