@@ -12,7 +12,7 @@
 
 - [环境要求](#环境要求)
 - [快速开始](#快速开始)
-- [⚠️ 重要警告](#️-重要警告)
+- [⚠️ 重要警告](#重要警告)
 - [项目结构](#项目结构)
 - [脚本说明](#脚本说明)
   - [build.sh — 构建](#buildsh--构建)
@@ -56,8 +56,8 @@
 ### 首次使用
 
 ```bash
-# 0. 克隆本项目（请替换为实际仓库地址）
-git clone <your-repo-url>  # 替换为实际仓库地址
+# 0. 克隆本项目（请替换 YOUR_USERNAME）
+git clone https://github.com/YOUR_USERNAME/llama.cpp_helper  # 请替换 YOUR_USERNAME
 cd llama.cpp_helper
 
 # 1. 克隆 llama.cpp 到相邻目录
@@ -139,7 +139,7 @@ run_env.sh  ──source──> common.sh
 
 > 模块分层详见 [AGENTS.md](AGENTS.md#模块分层)。
 
-> `run_env.sh` 仅能通过 `source` 使用（详见 [⚠️ 重要警告](#️-重要警告)）。
+> `run_env.sh` 仅能通过 `source` 使用（详见 [⚠️ 重要警告](#重要警告)）。
 
 ---
 
@@ -402,9 +402,9 @@ sudo apt install util-linux  # Debian/Ubuntu
 
 ```bash
 make help       # 显示可用目标（等同于 make）
-make lint       # ShellCheck 静态分析（5 个脚本）
+make lint       # ShellCheck 静态分析（6 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（134 项）
+make test       # bats-core 测试套件（135 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 
