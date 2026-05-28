@@ -296,7 +296,9 @@ _check_local_repo() {
 
     orig_dir="$(pwd)"
     cd "$LLAMA_CPP_SRC" >/dev/null
-    # 后续函数运行 git 命令时不带 -C，依赖此工作目录。
+    # 注意：此处 cd 改变全局工作目录。后续函数（_update_source, _rollback 等）
+    # 运行 git 命令时不带 -C，依赖此工作目录。所有错误路径必须调用
+    # llama_cd_back 恢复原始目录。重构为 git -C 需要修改约 15 处调用。
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
         git status --short

@@ -13,6 +13,8 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     set -euo pipefail
 fi
 
+# 注意：此处内联初始化 SCRIPT_DIR，因为 source common.sh 需要它。
+# llama_init_script_dir() 存在但仅用于无法提前解析 SCRIPT_DIR 的场景（如 run_env.sh）。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 readonly SCRIPT_DIR
 source "${SCRIPT_DIR}/common.sh"
@@ -45,8 +47,10 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     trap '_cleanup_on_exit' EXIT
 fi
 
-# EXIT trap：确保 llama_die→exit 路径的清理；_CLEANUP_DONE 守卫防止
-# SIGINT/SIGTERM（_CLEANUP_DONE 守卫）和 EXIT 同时触发时的重复执行。
+# 双重 trap 设计说明：
+# - llama_setup_trap 注册 SIGINT/SIGTERM → _cleanup_on_exit（用户中断清理）
+# - trap EXIT → _cleanup_on_exit（确保 llama_die→exit 路径也执行清理）
+# _CLEANUP_DONE 守卫防止信号与 EXIT 同时触发时的重复执行。
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
 _show_help() {
@@ -133,9 +137,9 @@ _verify_linking() {
     local ldd_output
     ldd_output=$(ldd "$bin_path" 2>/dev/null) || true
     if grep -qiE "$pattern" <<< "$ldd_output"; then
-        grep -iE "$pattern" <<< "$ldd_output" | while IFS= read -r line; do
+        while IFS= read -r line; do
             llama_detail "$line"
-        done
+        done < <(grep -iE "$pattern" <<< "$ldd_output")
         llama_ok "${label} 链接正常"
     else
         llama_warn "${not_found_msg}"
@@ -164,9 +168,9 @@ _verify_cuda_devices() {
     local bench_output
     bench_output=$(LC_ALL=C "${bin_dir}/llama-bench" --help 2>&1 || true)
     if grep -q "found [0-9]* CUDA devices" <<< "$bench_output"; then
-        echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:" | while IFS= read -r line; do
+        while IFS= read -r line; do
             llama_detail "$line"
-        done
+        done < <(echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:")
         llama_ok "CUDA 设备检测完成"
     else
         llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
