@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+bats_require_minimum_version 1.5.0
 # Characterization tests for common.sh — captures CURRENT behavior before refactoring
 
 load test_helper
@@ -784,7 +785,7 @@ conda() {
     fi
 }
 CONDAEOF
-    CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
+    CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run -127 bash -c "
         set -euo pipefail
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
         llama_activate_conda
@@ -793,5 +794,5 @@ CONDAEOF
         : \${_LLAMA_TEST_UNSET_VAR_XYZ}
     "
     # Under set -u, referencing an unset variable should cause exit code > 0
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 127 ]
 }
