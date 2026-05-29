@@ -97,7 +97,6 @@ load test_helper
 
 # --- OpenBLAS linking: ensure pattern does not match cublas ---
 @test "_verify_openblas_linking does not match cublas (no false positive)" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
 
     local fake_bin="${TEST_TMPDIR}/fake_bin_cublas"
     mkdir -p "$fake_bin"
@@ -105,32 +104,21 @@ load test_helper
     echo '#!/bin/bash' > "$fake_binary"
     chmod +x "$fake_binary"
 
-    # Stub ldd to return only cublas (no openblas at all)
-    ldd() { echo "libcublas.so.12 => /usr/lib/x86_64-linux-gnu/libcublas.so.12"; }
-    export -f ldd
-
-    run _verify_openblas_linking "$fake_bin"
+    # Stub ldd inside the run subshell so the function dies with it
+    run bash -c "_LLAMA_SOURCE_ONLY=1 source \"${BATS_TEST_DIRNAME}/../build.sh\"; ldd() { echo 'libcublas.so.12 => /usr/lib/x86_64-linux-gnu/libcublas.so.12'; }; _verify_openblas_linking \"${fake_bin}\""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "未找到 OpenBLAS" ]]
-
-    unset -f ldd
 }
 
 @test "_verify_openblas_linking matches libopenblas correctly" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
-
     local fake_bin="${TEST_TMPDIR}/fake_bin_openblas"
     mkdir -p "$fake_bin"
     local fake_binary="${fake_bin}/llama-cli"
     echo '#!/bin/bash' > "$fake_binary"
     chmod +x "$fake_binary"
 
-    ldd() { echo "libopenblas.so.0 => /usr/lib/x86_64-linux-gnu/libopenblas.so.0"; }
-    export -f ldd
-
-    run _verify_openblas_linking "$fake_bin"
+    # Stub ldd inside the run subshell so the function dies with it
+    run bash -c "_LLAMA_SOURCE_ONLY=1 source \"${BATS_TEST_DIRNAME}/../build.sh\"; ldd() { echo 'libopenblas.so.0 => /usr/lib/x86_64-linux-gnu/libopenblas.so.0'; }; _verify_openblas_linking \"${fake_bin}\""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "OpenBLAS 链接正常" ]]
-
-    unset -f ldd
 }

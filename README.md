@@ -117,6 +117,8 @@ bash build.sh -i
 ├── Makefile          # lint / syntax / test / check
 ├── .shellcheckrc     # ShellCheck 规则豁免
 ├── .editorconfig     # EditorConfig 统一编辑器配置
+├── .gitignore          # Git 忽略规则
+├── LICENSE             # MIT 许可证
 └── tests/            # bats-core 测试套件
     ├── test_helper.bash
     ├── test_common.bats
@@ -152,7 +154,7 @@ run_env.sh  ──source──> common.sh
 使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS + CUDA 双后端。构建完成后自动验证二进制文件、动态库链接和 GPU 设备。
 
 ```bash
-bash build.sh       # 完整重新构建（清理 + 配置 + 编译）
+bash build.sh       # 完整重新构建（清理 + 配置 + 编译 + 验证）
 bash build.sh -i    # 增量构建（保留 build 目录，仅重新编译变更）
 ```
 
@@ -404,7 +406,7 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（6 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（135 项）
+make test       # bats-core 测试套件（144 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 

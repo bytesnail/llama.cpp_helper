@@ -1,14 +1,14 @@
 # 项目知识库
 
-**生成时间：** 2026-05-27
-**提交：** 6cd7cfc
+**生成时间：** 2026-05-29
+**提交：** 12907c7
 **分支：** main
 
 ## 概述
 
-llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1819 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 135 项测试。
+llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1824 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站优化。质量保障：ShellCheck 静态分析 + bats-core 144 项测试。
 
-> 所有脚本均需 Bash >= 4.2（`declare -A` 关联数组：run_env.sh、update.sh（`local -A`）；`[[ -v ]]` 变量测试：common.sh、update.sh 使用）。
+> 所有脚本均需 Bash >= 4.2（`declare -A` 关联数组：run_env.sh（declare -A）、update.sh（local -A）；`[[ -v ]]` 变量测试：common.sh、update.sh 使用）。
 
 用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。本文档面向 AI 代理和开发者。
 
@@ -30,8 +30,8 @@ llama.cpp 自动构建与管理的 shell 脚本工具集。5 个 Bash 脚本（1
 |----|------|-----|------|
 | 配置层 | `config.sh` | 60 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
 | 工具层 | `common.sh` | 611 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 392/552/204 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
-| 测试层 | `tests/` | 1317 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 392/557/204 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
+| 测试层 | `tests/` | 1562 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
 ## 何处查找
 

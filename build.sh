@@ -167,10 +167,10 @@ _verify_cuda_devices() {
     fi
     local bench_output
     bench_output=$(LC_ALL=C "${bin_dir}/llama-bench" --help 2>&1 || true)
-    if grep -q "found [0-9]* CUDA devices" <<< "$bench_output"; then
+    if grep -q "found [0-9][0-9]* CUDA devices" <<< "$bench_output"; then
         while IFS= read -r line; do
             llama_detail "$line"
-        done < <(echo "$bench_output" | grep -E "found [0-9]* CUDA devices|Device [0-9]*:")
+        done < <(echo "$bench_output" | grep -E "found [0-9]+ CUDA devices|Device [0-9]+:")
         llama_ok "CUDA 设备检测完成"
     else
         llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"

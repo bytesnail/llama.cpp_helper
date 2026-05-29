@@ -261,9 +261,6 @@ _parse_args() {
                 llama_show_version
                 llama_safe_exit 0
                 ;;
-            --*)
-                llama_die "未知选项: $1"
-                ;;
             -*)
                 llama_die "未知选项: $1"
                 ;;
@@ -492,6 +489,14 @@ _build_with_rollback() {
     llama_run_silent bash "$BUILD_SCRIPT"
     local build_status=$?
 
+    # 更新前的版本优先使用 tag，获取不到时回退到 commit id
+    local before_ver
+    if [[ -n "${current_tag}" && "${current_tag}" != "(无标签)" ]]; then
+        before_ver="${current_tag}"
+    else
+        before_ver="${current_short}"
+    fi
+
     if [[ "$build_status" -ne 0 ]]; then
         _rollback || true
         llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
@@ -516,12 +521,12 @@ _build_with_rollback() {
             llama_die "回滚后构建也失败，请手动恢复到 ${current_short} 后重试"
         fi
         llama_ok "更新失败但已回滚并重新构建成功"
-        _print_success_summary 0 "${current_short} (${current_tag})" "${release_tag} (构建失败，已回滚)" ""
+        _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
         llama_cd_back
         llama_safe_exit 0
     fi
     # 构建成功
-    _print_success_summary "${need_source_update}" "${current_short}" "${release_tag}" "${release_date:-}"
+    _print_success_summary "${need_source_update}" "${before_ver}" "${release_tag}" "${release_date:-}"
 
     llama_cd_back
     return 0

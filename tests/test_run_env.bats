@@ -81,7 +81,7 @@ load test_helper
 
 @test "color save inline copy matches llama_save_colors" {
     local run_env_vars
-    run_env_vars=$(sed -n 's/.*for _llama_color_var in \([^;]*\);.*/\1/p' "${BATS_TEST_DIRNAME}/../run_env.sh" | head -1)
+    run_env_vars=$(sed -n 's/.*for cvar in \([^;]*\);.*/\1/p' "${BATS_TEST_DIRNAME}/../run_env.sh" | head -1)
 
     local common_vars
     common_vars=$(sed -n 's/.*for cvar in \([^;]*\);.*/\1/p' "${BATS_TEST_DIRNAME}/../common.sh" | head -1)

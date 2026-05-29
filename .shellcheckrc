@@ -11,7 +11,7 @@ source-path=SCRIPTDIR
 # SC2034 triggers on 0.10.0 as a known false positive;
 # SC2119/SC2312/SC2317 are non-triggering on 0.10.0. All kept for older versions.
 # SC2034: config.sh vars used by sourcing scripts — false positive with external-sources
-# SC2119: llama_acquire_lock intentionally uses default LOCK_FILE (no args needed)
+# SC2119: functions use default parameter values (e.g. llama_acquire_lock uses $LOCK_FILE) — calls without args are intentional
 # SC2312: command output captured into variable via $() — false positive when
 # the captured output is the intended result, not a discarded exit code check
 # SC2317: return N 2>/dev/null || exit N — unreachable exit is intentional fallback

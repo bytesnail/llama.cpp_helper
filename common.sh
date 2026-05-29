@@ -112,7 +112,7 @@ llama_get_cpu_count() {
     ncpu=$(nproc 2>/dev/null) || \
     ncpu=$(sysctl -n hw.ncpu 2>/dev/null) || \
     ncpu=$(grep -c ^processor /proc/cpuinfo 2>/dev/null) || \
-    ncpu=4
+    ncpu=4 # 回退 4：未知平台的保守默认值
     echo "$ncpu"
 }
 

@@ -38,9 +38,10 @@ teardown() {
 }
 
 @test "llama_err outputs to stderr" {
-    run llama_err "failure"
+    run --separate-stderr llama_err "failure"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ \[ERROR\].*failure ]]
+    [[ "$stderr" =~ \[ERROR\].*failure ]]
+    [ -z "$stdout" ]
 }
 
 @test "llama_step outputs === header === to stdout" {
