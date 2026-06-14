@@ -2,8 +2,9 @@
 # ============================================================
 # build.sh — llama.cpp 构建脚本
 # 目标：同时启用 OpenBLAS（CPU）+ CUDA（双 RTX 2080 Ti NVLink）
-# 硬件：Intel Xeon E5-2667 v4（32 核）/ 251GB RAM
-#       2× RTX 2080 Ti 22GB（NVLink 2 链路，sm_75）
+# 硬件：Intel Xeon E5-2667 v4（2 路 × 8 物理核，16 物理核 / 32 线程，AVX2+FMA，无 AVX-512）
+#       256GB RAM
+#       2× RTX 2080 Ti 22GB（NVLink NV2 双链路，sm_75）
 # 软件：CUDA / OpenBLAS / GCC / Ninja（版本要求：见 README）
 # Usage: cd /path/to/llama.cpp_helper && bash build.sh
 # ============================================================
@@ -280,7 +281,7 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 源码目录" || llama_die
     llama_check_file "${LLAMA_CPP_SRC}/CMakeLists.txt" "llama.cpp CMakeLists.txt" || llama_die
 
-    llama_check_gpu || true
+    llama_print_hardware_summary
 
     # --- 磁盘空间检查 --------------------------------------------
     llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
@@ -348,6 +349,7 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
         -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
         -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
+        -DGGML_CUDA_GRAPHS="${GGML_CUDA_GRAPHS}" \
         ${cmake_extra_args[@]+"${cmake_extra_args[@]}"}
     local cmake_exit=$?
 

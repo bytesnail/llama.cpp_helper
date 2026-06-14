@@ -18,6 +18,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # --- 颜色 ----------------------------------------------------
+# 颜色变量名清单（单一来源）：驱动 llama_save_colors / llama_restore_colors，
+# 消除此前 common.sh 与 run_env.sh 各维护一份副本的重复。
+readonly _LLAMA_COLOR_VARS=(RED GREEN YELLOW CYAN BLUE BOLD NC)
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
     GREEN='\033[0;32m'
@@ -144,6 +147,193 @@ llama_check_gpu() {
     fi
     llama_warn "未检测到 NVIDIA GPU"
     return 1
+}
+
+# --- 硬件信息采集 --------------------------------------------
+# 集中采集对 llama.cpp 构建与运行有意义的硬件信息。
+# 设计原则：无 root 依赖；外部工具缺失时优雅降级（输出空串/0/未知）；
+#           仅读取系统状态，绝不修改。复用上文 llama_get_cpu_count /
+#           llama_get_gpu_count，此处补充结构化的拓扑/指令集/互联信息。
+
+# Usage: _llama_join <separator> <element>...
+# 用分隔符连接各元素，输出到 stdout；无元素时输出空串。
+_llama_join() {
+    local sep="$1"; shift
+    local out="" e
+    for e in "$@"; do
+        out="${out:+${out}${sep}}${e}"
+    done
+    printf '%s' "$out"
+}
+
+# Usage: _llama_lscpu_field <field_regex>
+# 解析 lscpu 输出中首个匹配字段（$1 为作用于首列的正则）的值，去前导空格。
+# lscpu 不可用时输出空串。
+_llama_lscpu_field() {
+    lscpu 2>/dev/null | awk -F: -v re="$1" '
+        $1 ~ re { sub(/^[[:space:]]+/, "", $2); print $2; exit }
+    '
+}
+
+# Usage: llama_hw_cpu_model
+# 输出 CPU 型号字符串；无法获取时输出空串。
+llama_hw_cpu_model() {
+    local model
+    model=$(_llama_lscpu_field "Model name")
+    if [[ -z "$model" ]]; then
+        model=$(awk -F: '/^model name/ { sub(/^ +/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null)
+    fi
+    printf '%s' "$model"
+}
+
+# Usage: llama_hw_cpu_sockets
+# 输出物理 CPU（socket）数量；无法获取时输出 0。
+llama_hw_cpu_sockets() {
+    local n
+    n=$(_llama_lscpu_field "^Socket")
+    [[ "$n" =~ ^[0-9]+$ ]] && printf '%s' "$n" || printf 0
+}
+
+# Usage: llama_hw_cpu_cores_physical
+# 输出物理核总数（sockets × 每路核数）；无法获取时输出 0。
+llama_hw_cpu_cores_physical() {
+    local sockets per_socket
+    sockets=$(llama_hw_cpu_sockets)
+    per_socket=$(_llama_lscpu_field "^Core")
+    if [[ "$sockets" =~ ^[0-9]+$ && "$per_socket" =~ ^[0-9]+$ ]]; then
+        printf '%s' $((sockets * per_socket))
+    else
+        printf 0
+    fi
+}
+
+# Usage: llama_hw_cpu_cores_logical
+# 输出逻辑线程数（含超线程）。复用 llama_get_cpu_count，缺失时回退保守值。
+llama_hw_cpu_cores_logical() {
+    llama_get_cpu_count
+}
+
+# llama.cpp CPU 后端相关的指令集映射（/proc/cpuinfo flag 名 → 显示名）。
+# 与 ggml/src/CMakeLists.txt 的 CPU 后端变体对应：haswell 起 CPU 路径有意义。
+# shellcheck disable=SC2034  # 数组由 llama_hw_cpu_flags 通过下标读取
+readonly _LLAMA_HW_CPU_FLAGS_BASIC=(
+    "sse4_2:SSE4.2" "avx:AVX" "avx2:AVX2" "fma:FMA" "f16c:F16C" "bmi2:BMI2" "avx_vnni:AVX-VNNI"
+)
+# shellcheck disable=SC2034
+readonly _LLAMA_HW_CPU_FLAGS_AVX512=(
+    "avx512f:F" "avx512cd:CD" "avx512bw:BW" "avx512dq:DQ" "avx512vl:VL"
+    "avx512vbmi:VBMI" "avx512vnni:VNNI" "avx512bf16:BF16" "avx512fp16:FP16"
+)
+
+# Usage: llama_hw_cpu_flags
+# 输出 llama.cpp 相关的 CPU 加速指令集（逗号分隔）；无 AVX-512 时不含其子集。
+# AVX-512 各子集合并显示为 AVX-512(F,CD,BW,...)。无 /proc/cpuinfo 时输出空串。
+llama_hw_cpu_flags() {
+    local flags_line
+    flags_line=$(awk -F: '/^flags/ { sub(/^ +/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null)
+    [[ -z "$flags_line" ]] && return 0
+
+    local padded=" $flags_line "
+    local result=() pair flag name
+    for pair in "${_LLAMA_HW_CPU_FLAGS_BASIC[@]}"; do
+        flag="${pair%%:*}"; name="${pair##*:}"
+        [[ "$padded" == *" $flag "* ]] && result+=("$name")
+    done
+
+    local avx512=()
+    for pair in "${_LLAMA_HW_CPU_FLAGS_AVX512[@]}"; do
+        flag="${pair%%:*}"; name="${pair##*:}"
+        [[ "$padded" == *" $flag "* ]] && avx512+=("$name")
+    done
+    if ((${#avx512[@]} > 0)); then
+        result+=("AVX-512($(_llama_join ',' "${avx512[@]}"))")
+    fi
+
+    _llama_join ', ' "${result[@]}"
+}
+
+# Usage: llama_hw_mem_total_bytes
+# 输出内存总量（字节）；无法获取时输出 0。
+llama_hw_mem_total_bytes() {
+    local kb
+    kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null)
+    [[ "$kb" =~ ^[0-9]+$ ]] && printf '%s' $((kb * 1024)) || printf 0
+}
+
+# Usage: llama_hw_mem_total_human
+# 输出内存总量的人类可读格式（复用 llama_human_size）；未知时输出"未知"。
+llama_hw_mem_total_human() {
+    local bytes
+    bytes=$(llama_hw_mem_total_bytes)
+    if ((bytes > 0)); then
+        llama_human_size "$bytes"
+    else
+        printf '未知'
+    fi
+}
+
+# Usage: llama_print_hardware_summary
+# 打印完整硬件信息汇总（CPU 拓扑/指令集、内存、GPU、NVLink 互联）。
+# 外部工具（lscpu/nvidia-smi）缺失时优雅降级，仅打印可获取的部分。
+# 供 build.sh 前置检查与 run_env.sh --status 调用。
+llama_print_hardware_summary() {
+    llama_step "硬件信息"
+
+    # --- CPU ---
+    local cpu_model sockets cores_phy cores_log flags
+    cpu_model=$(llama_hw_cpu_model)
+    sockets=$(llama_hw_cpu_sockets)
+    cores_phy=$(llama_hw_cpu_cores_physical)
+    cores_log=$(llama_hw_cpu_cores_logical)
+    flags=$(llama_hw_cpu_flags)
+
+    [[ -n "$cpu_model" ]] && llama_detail "CPU:    ${cpu_model}"
+    if ((sockets > 0 && cores_phy > 0)); then
+        local per_socket=$((cores_phy / sockets))
+        llama_detail "拓扑:   ${sockets} 路 × ${per_socket} 物理核（共 ${cores_phy} 物理核 / ${cores_log} 线程）"
+    fi
+    if [[ -n "$flags" ]]; then
+        llama_detail "指令集: ${flags}"
+        [[ "$flags" == *"AVX-512"* ]] || \
+            llama_detail "        （无 AVX-512 — GGML_NATIVE 将生成 haswell 级 CPU 后端）"
+    fi
+
+    # --- 内存 ---
+    llama_detail "内存:   $(llama_hw_mem_total_human)"
+
+    # --- GPU + NVLink 互联 ---
+    local gpu_count
+    gpu_count=$(llama_get_gpu_count)
+    if ((gpu_count > 0)) && command -v nvidia-smi &>/dev/null; then
+        llama_detail "GPU（${gpu_count} 块）:"
+        local idx name cc vram vram_human
+        while IFS='|' read -r idx name cc vram; do
+            vram_human="?"
+            [[ "$vram" =~ ^[0-9]+$ ]] && vram_human=$(llama_human_size $((vram * 1024 * 1024)))
+            llama_detail "  [${idx}] ${name}（sm_${cc}, ${vram_human}）"
+        done < <(nvidia-smi --query-gpu=index,name,compute_cap,memory.total \
+                           --format=csv,noheader,nounits 2>/dev/null | sed 's/, /|/g')
+
+        # NVLink 拓扑：topo -m 矩阵中 GPU 间互联类型，NV# 表示 # 条 NVLink 绑定
+        local max_nv
+        max_nv=$(nvidia-smi topo -m 2>/dev/null | grep -oE 'NV[0-9]+' | sort -u | tail -1)
+        if [[ -n "$max_nv" ]]; then
+            local links link_bw
+            links=${max_nv#NV}
+            link_bw=$(nvidia-smi nvlink --status -i 0 2>/dev/null | grep -oE '[0-9.]+ GB/s' | head -1)
+            if [[ -n "$link_bw" ]]; then
+                local agg
+                agg=$(awk -v b="${link_bw% GB/s}" -v n="$links" 'BEGIN{printf "%.1f", b*n}')
+                llama_detail "NVLink: ${max_nv}（${links} 链路，单链路 ${link_bw}，聚合约 ${agg} GB/s）"
+            else
+                llama_detail "NVLink: ${max_nv}（${links} 链路）"
+            fi
+        else
+            llama_detail "NVLink: 未检测到（GPU 间经 PCIe 互联）"
+        fi
+    else
+        llama_detail "GPU:    未检测到 NVIDIA GPU"
+    fi
 }
 
 # --- conda 环境 -----------------------------------------------
@@ -550,13 +740,10 @@ llama_show_version() {
 }
 
 # Usage: llama_save_colors
-# 保存当前颜色变量值，供后续恢复使用。
-# 注意：run_env.sh 的内联颜色保存循环包含此循环的副本，因为 common.sh
-#       在需要保存颜色时尚未加载。两份副本必须保持同步：修改此处的变量列表
-#       时，需同步修改 run_env.sh 中的内联副本。
+# 保存当前颜色变量值（_LLAMA_COLOR_VARS 列表），供 llama_restore_colors 恢复。
 llama_save_colors() {
     local cvar
-    for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+    for cvar in "${_LLAMA_COLOR_VARS[@]}"; do
         printf -v "_LLAMA_SAVED_${cvar}" '%s' "${!cvar-}"
     done
 }
@@ -565,7 +752,7 @@ llama_save_colors() {
 # 恢复 llama_save_colors 保存的颜色变量。清理临时变量。
 llama_restore_colors() {
     local cvar saved_var
-    for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
+    for cvar in "${_LLAMA_COLOR_VARS[@]}"; do
         saved_var="_LLAMA_SAVED_${cvar}"
         if [[ -n "${!saved_var+isset}" ]]; then
             printf -v "$cvar" '%s' "${!saved_var}"
