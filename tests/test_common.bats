@@ -797,3 +797,87 @@ CONDAEOF
     # Under set -u, referencing an unset variable should cause exit code > 0
     [ "$status" -eq 127 ]
 }
+
+# --- Hardware Info ---
+@test "_llama_join joins multiple elements with separator" {
+    run _llama_join ", " a b c
+    [ "$status" -eq 0 ]
+    [ "$output" = "a, b, c" ]
+}
+
+@test "_llama_join handles single element" {
+    run _llama_join ", " only
+    [ "$status" -eq 0 ]
+    [ "$output" = "only" ]
+}
+
+@test "_llama_join returns empty for no elements" {
+    run _llama_join ", "
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+}
+
+@test "llama_hw_cpu_model returns non-empty string" {
+    run llama_hw_cpu_model
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+}
+
+@test "llama_hw_cpu_sockets returns positive integer" {
+    run llama_hw_cpu_sockets
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -ge 1 ]
+}
+
+@test "llama_hw_cpu_cores_physical returns positive integer" {
+    run llama_hw_cpu_cores_physical
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -ge 1 ]
+}
+
+@test "llama_hw_cpu_cores_logical returns positive integer" {
+    run llama_hw_cpu_cores_logical
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -ge 1 ]
+}
+
+@test "llama_hw_cpu_cores_physical does not exceed logical" {
+    local phys log
+    phys=$(llama_hw_cpu_cores_physical)
+    log=$(llama_hw_cpu_cores_logical)
+    [ "$phys" -le "$log" ]
+}
+
+@test "llama_hw_cpu_flags output is well-formed" {
+    run llama_hw_cpu_flags
+    [ "$status" -eq 0 ]
+    # 非空时：无连续分隔、无尾随/前导逗号
+    [[ ! "$output" =~ ,, ]]
+    [[ "$output" != *, ]]
+    [[ "$output" != ,* ]]
+}
+
+@test "llama_hw_mem_total_bytes returns positive integer" {
+    run llama_hw_mem_total_bytes
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -gt 0 ]
+}
+
+@test "llama_hw_mem_total_human returns readable size" {
+    run llama_hw_mem_total_human
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+    [[ "$output" =~ (GiB|MiB|TiB|未知) ]]
+}
+
+@test "llama_print_hardware_summary includes CPU and memory sections" {
+    run llama_print_hardware_summary
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "硬件信息" ]]
+    [[ "$output" =~ "CPU:" ]]
+    [[ "$output" =~ "内存:" ]]
+}

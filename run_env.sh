@@ -24,17 +24,9 @@ _LLAMA_RUN_ENV_SOURCED=1
 # 本脚本设计为 source 使用；未启用 set -euo pipefail
 # 因为 source 时退出会杀死父 shell
 
-# 加载 common.sh
-# 保存颜色变量 — 必须在 source common.sh 之前完成（common.sh 会覆盖它们）
-# 使用内联代码而非 llama_save_colors()（common.sh 的 llama_save_colors() 函数），因为 common.sh 尚未加载。
-# 两份副本必须保持同步：修改此处的变量列表时，需同步修改 common.sh 中的
-# llama_save_colors() 函数。
-for cvar in RED GREEN YELLOW CYAN BLUE BOLD NC; do
-    printf -v "_LLAMA_SAVED_${cvar}" '%s' "${!cvar-}"
-done
-unset cvar
-
 # 引导：查找并 source common.sh（共享辅助函数尚不可用）
+# 颜色变量由 common.sh 统一管理（_LLAMA_COLOR_VARS 为单一来源）；
+# 退出时由 llama_restore_colors 清理，不污染父 shell。
 boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 if [[ ! -f "${boot_dir}/common.sh" ]]; then
     # shellcheck disable=SC2317
@@ -130,15 +122,16 @@ main() {
 
     # --- 状态模式 ------------------------------------------------
     if [[ "$show_status" -eq 1 ]]; then
-        llama_step "当前 llama.cpp 环境变量状态"
+        llama_print_hardware_summary
+        llama_step "环境变量状态"
         _show_env_vars
-
-        llama_info "GPU 信息:"
+        llama_info "GPU 运行时状态："
         if command -v nvidia-smi &>/dev/null; then
-            nvidia-smi --query-gpu=name,memory.total,memory.free,temperature.gpu,utilization.gpu \
-                       --format=csv,noheader 2>/dev/null | while IFS= read -r line; do
+            local line
+            while IFS= read -r line; do
                 llama_detail "$line"
-            done
+            done < <(nvidia-smi --query-gpu=index,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw \
+                                 --format=csv,noheader 2>/dev/null)
         else
             llama_warn "未找到 nvidia-smi"
         fi
@@ -177,20 +170,13 @@ main() {
         fi
     done < <(_sorted_env_var_names)
 
-    # --- 重要提示 ------------------------------------------------
+    # --- 补充说明 ------------------------------------------------
     cat <<EOF
 
-${YELLOW}⚠️  重要提示:${NC}
-  本配置针对双 RTX 2080 Ti (NVLink) 离散 GPU 优化。
-
-${YELLOW}未启用的变量:${NC}
-  GGML_CUDA_ENABLE_UNIFIED_MEMORY - 统一内存对离散 GPU 性能有害，
-  仅在集成 GPU 或 VRAM 不足导致 OOM 时使用。
-
-${YELLOW}可选的额外优化:${NC}
-  export GGML_CUDA_GRAPH_OPT=1     # 启用 CUDA 图优化（单 GPU 场景受益）
-  export GGML_CUDA_NO_PINNED=1     # 禁用固定内存（低显存场景）
-
+${YELLOW}⚠️  注意:${NC}
+  • 针对 2× RTX 2080 Ti (NVLink) 离散 GPU 优化
+  • GGML_CUDA_ENABLE_UNIFIED_MEMORY 未启用 — 统一内存对离散 GPU 有害，仅 OOM 时手动开启
+  • 可选优化：GGML_CUDA_GRAPH_OPT=1（CUDA 图优化）、GGML_CUDA_NO_PINNED=1（低显存禁用固定内存）
 EOF
 
     llama_ok "llama.cpp 运行环境已加载"
