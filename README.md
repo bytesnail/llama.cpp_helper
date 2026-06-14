@@ -416,7 +416,7 @@ bats tests/test_common.bats
 
 **测试依赖：** `bats-core` 和 `shellcheck`。
 
-> 架构、编码规范、命名约定、日志规范等详见 [AGENTS.md](AGENTS.md)。
+> 架构、编码规范、命名约定、日志规范、Git 工作流（feature 分支 + PR）等详见 [AGENTS.md](AGENTS.md)。
 
 ---
 
