@@ -2,7 +2,7 @@
 
 本文档为本项目的 AI 编码代理（Claude Code、opencode 等）提供统一上下文，面向修改脚本的开发者。`CLAUDE.md` 是指向本文件的软链接，两套工具读取同一份内容。用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。
 
-> 本项目是针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理 **Bash 脚本工具集**（5 个脚本，2000 LOC），面向双路 RTX 2080 Ti (NVLink) 工作站调优。**不含 C/C++ 代码**——通过调用 CMake/Ninja/git 等外部工具构建位于相邻目录 `../llama.cpp` 的上游源码。
+> 本项目是针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理 **Bash 脚本工具集**，面向双路 RTX 2080 Ti (NVLink) 工作站调优。**不含 C/C++ 代码**——通过调用 CMake/Ninja/git 等外部工具构建位于相邻目录 `../llama.cpp` 的上游源码。
 
 ## 语言策略
 
@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（156 项）
+make test           # bats-core 测试套件（155 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -75,12 +75,12 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 ## 模块分层
 
-| 层 | 文件 | LOC | 职责 |
-|----|------|-----|------|
-| 配置层 | `config.sh` | 61 | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
-| 工具层 | `common.sh` | 798 | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、**硬件信息采集**（CPU 拓扑/指令集/内存/GPU/NVLink）、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 394/557/190 | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
-| 测试层 | `tests/` | 1647 | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
+| 层 | 文件 | 职责 |
+|----|------|------|
+| 配置层 | `config.sh` | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
+| 工具层 | `common.sh` | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、**硬件信息采集**（CPU 拓扑/指令集/内存/GPU/NVLink）、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
+| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
+| 测试层 | `tests/` | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
 ## 何处查找
 
