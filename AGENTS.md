@@ -38,6 +38,18 @@ source run_env.sh        # 加载运行时环境变量（必须 source，直接�
 
 所有入口脚本均支持 `--help` 和 `--version`。**测试依赖** `shellcheck` 和 `bats-core`（`make` 各目标会自动检测缺失并提示安装）。
 
+## Git 工作流
+
+**个人仓，简易流程：修改直接提交到 `main` 分支**（不使用 feature 分支 + PR）。
+
+- **分支**：日常开发直接在 `main` 上提交，无需新建 feature 分支
+- **提交前**：先运行 `make check`（lint + syntax + test 全部通过）再提交
+- **提交信息**：遵循 [Conventional Commits](https://www.conventionalcommits.org/) 中文风格——`<type>: <描述>`，描述用中文，代码引用/路径用英文（遵循 [语言策略](#语言策略)）
+- **类型前缀**：`feat`（新功能）、`fix`（修复）、`docs`（文档）、`refactor`（重构）、`test`（测试）、`chore`（构建/配置/工具）
+- **每个提交聚焦单一变更**，保持历史清晰可追溯
+
+> 示例：`fix: 修复 set -e 中止、构建产物误删与 Bash 4.2 兼容性问题`
+
 ## 架构
 
 理解四层 source 链是高效修改的前提：
