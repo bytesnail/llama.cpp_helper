@@ -37,7 +37,9 @@ _cleanup_on_exit() {
     local exit_code=$?
     [[ "${_CLEANUP_DONE:-0}" -eq 1 ]] && return 0
     _CLEANUP_DONE=1
-    if [[ "${incremental:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
+    # 仅当本次运行确实进入重建流程（_BUILD_TOUCHED）后才清理构建目录；
+    # 否则参数错误/前置检查失败等早期退出会误删上一次成功的构建产物。
+    if [[ "${_BUILD_TOUCHED:-0}" -eq 1 && "${incremental:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
         llama_warn "清理未完成的构建目录..."
         rm -rf "$BUILD_DIR"
     fi
@@ -157,27 +159,6 @@ _verify_openblas_linking() {
     _verify_linking "${1:-}" "${2:-llama-cli}" "libopenblas|libblas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
 }
 
-# Usage: _verify_cuda_devices <bin_dir>
-_verify_cuda_devices() {
-    local bin_dir="$1"
-
-    llama_info "可用设备："
-    if [[ ! -x "${bin_dir}/llama-bench" ]]; then
-        llama_warn "未找到 llama-bench，跳过设备检测"
-        return 0
-    fi
-    local bench_output
-    bench_output=$(LC_ALL=C "${bin_dir}/llama-bench" --help 2>&1 || true)
-    if grep -q "found [0-9][0-9]* CUDA devices" <<< "$bench_output"; then
-        while IFS= read -r line; do
-            llama_detail "$line"
-        done < <(echo "$bench_output" | grep -E "found [0-9]+ CUDA devices|Device [0-9]+:")
-        llama_ok "CUDA 设备检测完成"
-    else
-        llama_warn "CUDA 设备检测失败（可能需要 source run_env.sh）"
-    fi
-}
-
 # Usage: _verify_openblas_runtime <bin_dir> [binary]
 _verify_openblas_runtime() {
     local bin_dir="$1"
@@ -218,11 +199,14 @@ _verify_build() {
     if "${bin_dir}/${verify_binary}" --version &>/dev/null; then
         llama_ok "${verify_binary} 可正常启动"
     else
-        llama_warn "${verify_binary} 启动验证失败"
+        # 二进制无法运行（如缺少运行时依赖/RPATH 错误）属真正的构建失败：
+        # 计入 errors 以阻止写入 .build-stamp，否则 llama_check_build_health
+        # 会将损坏的构建误判为健康，update.sh 据此跳过重建。
+        llama_err "${verify_binary} 启动验证失败（二进制无法运行，可能缺少运行时依赖）"
+        errors=$((errors + 1))
     fi
 
     # 运行时验证（非致命）
-    _verify_cuda_devices "$bin_dir" || true
     _verify_openblas_runtime "$bin_dir" "$verify_binary" || true
     return "$errors"
 }
@@ -314,6 +298,7 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
 
     # --- 步骤 1：清理旧构建 --------------------------------------
     if [[ "$incremental" -eq 0 ]]; then
+        _BUILD_TOUCHED=1  # 脚本级标记：已进入重建流程，EXIT trap 据此判断是否清理
         llama_step "步骤 1/4：清理旧构建"
         if [[ -d "$BUILD_DIR" ]]; then
             llama_info "移除旧 build 目录..."

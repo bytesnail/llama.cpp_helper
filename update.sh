@@ -122,7 +122,7 @@ _cleanup_on_interrupt() {
         git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
     fi
     if [[ -n "${orig_dir:-}" ]]; then
-        llama_cd_back
+        llama_cd_back || true  # set -e 在信号处理函数内仍生效，失败不能阻断后续 safe_exit
     fi
     llama_safe_exit 130
 }
@@ -139,7 +139,10 @@ _cleanup_stale_submodules() {
     while IFS= read -r gitlink; do
         gitlink="${gitlink#"${LLAMA_CPP_SRC}"/}"
         mod_dir="$(dirname "$gitlink")"
-        if [[ -v expected_paths[$mod_dir] ]]; then
+        # 使用 ${arr[k]+x} 而非 [[ -v arr[k] ]]：后者对关联数组元素的支持
+        # 需要 Bash 4.3+，而本项目声明支持 Bash 4.2（4.2 上 -v 恒为假，
+        # 会导致 continue 被跳过、误删合法子模块）。
+        if [[ -n "${expected_paths[$mod_dir]+x}" ]]; then
             continue
         fi
         if grep -q '^gitdir:' "${LLAMA_CPP_SRC}/${gitlink}" 2>/dev/null; then
@@ -219,31 +222,33 @@ _fetch_latest_release_curl() {
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local tmp
     tmp=$(mktemp "${TMPDIR:-/tmp}/llama_release.XXXXXX.json")
-    # shellcheck disable=SC2064
-    trap "rm -f '$tmp'" RETURN
-    # 注意：RETURN trap 仅在函数正常返回时触发，不处理 SIGINT 等信号。
-    # 若函数被信号中断时 $tmp 尚未清理，属于低风险的临时文件残留。
+    # 注意：此处不使用 RETURN trap 清理 $tmp —— bash 的 RETURN trap 不限定于
+    # 当前函数，设置后会持续到脚本结束并在其后每个函数返回时触发（全局泄漏，
+    # 还会覆盖其它 RETURN trap）。改为在每条退出路径显式 rm -f。
 
     local http_code
     http_code=$(curl -sL --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
         -o "$tmp" -w "%{http_code}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "$api_url") || return 1
+        "$api_url") || { rm -f "$tmp"; return 1; }
 
     if [[ "$http_code" != "200" ]]; then
         llama_err "GitHub API 请求失败 (HTTP ${http_code})"
         if [[ -s "$tmp" ]]; then
             cat "$tmp" >&2 || true
         fi
+        rm -f "$tmp"
         return 1
     fi
 
     # 使用 stdin 重定向，避免路径注入到 Python 字符串中
-    release_tag=$(_json_field tag_name < "$tmp") || return 1
-    release_commit=$(_json_field target_commitish < "$tmp") || return 1
-    release_date=$(_json_field published_at < "$tmp") || return 1
-    release_url=$(_json_field html_url < "$tmp") || return 1
+    release_tag=$(_json_field tag_name < "$tmp") || { rm -f "$tmp"; return 1; }
+    release_commit=$(_json_field target_commitish < "$tmp") || { rm -f "$tmp"; return 1; }
+    release_date=$(_json_field published_at < "$tmp") || { rm -f "$tmp"; return 1; }
+    release_url=$(_json_field html_url < "$tmp") || { rm -f "$tmp"; return 1; }
+
+    rm -f "$tmp"
 }
 
 # --- 子函数 --------------------------------------------------
@@ -411,7 +416,7 @@ _resolve_target() {
 
 # Usage: _update_source
 _update_source() {
-    llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
+    llama_check_disk_space "$LLAMA_CPP_SRC" || { llama_cd_back; llama_die; }
     llama_info "正在从远程仓库拉取最新引用..."
 
     llama_with_network_context "从远程仓库拉取标签" git fetch origin --quiet --tags || {

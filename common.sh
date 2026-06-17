@@ -126,26 +126,13 @@ llama_get_cpu_count() {
 llama_get_gpu_count() {
     if command -v nvidia-smi &>/dev/null; then
         local count
-        count=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
+        # || true：nvidia-smi 存在但运行失败（驱动错误等）时，pipefail 会使管线
+        # 返回非零，在 set -e 下终止整个脚本；此处应降级为 0 GPU 而非中止构建。
+        count=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l || true)
         echo "$count"
         return 0
     fi
     echo "0"
-    return 1
-}
-
-# Usage: llama_check_gpu
-llama_check_gpu() {
-    local gpu_count
-    gpu_count=$(llama_get_gpu_count)
-    if [[ "$gpu_count" =~ ^[0-9]+$ ]] && ((gpu_count > 0)); then
-        local line
-        nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | while IFS= read -r line; do
-            llama_detail "$line"
-        done
-        return 0
-    fi
-    llama_warn "未检测到 NVIDIA GPU"
     return 1
 }
 
@@ -303,7 +290,9 @@ llama_print_hardware_summary() {
 
     # --- GPU + NVLink 互联 ---
     local gpu_count
-    gpu_count=$(llama_get_gpu_count)
+    # || true：llama_get_gpu_count 在无 nvidia-smi 时返回 1；本函数设计为优雅降级
+    # （显示 "未检测到 NVIDIA GPU"），不应在 set -e 下中止整个构建。
+    gpu_count=$(llama_get_gpu_count || true)
     if ((gpu_count > 0)) && command -v nvidia-smi &>/dev/null; then
         llama_detail "GPU（${gpu_count} 块）:"
         local idx name cc vram vram_human
@@ -524,7 +513,10 @@ llama_check_disk_space() {
     fi
 
     local available_kb
-    available_kb=$(LC_ALL=C df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}')
+    # || true：df 在某些文件系统（FUSE/损坏挂载）下失败时，pipefail 使管线返回非零，
+    # 在 set -e 下会中止脚本。本函数契约是"不阻塞"（仅警告），故显式忽略退出码，
+    # 交由下方 -z 检查处理空输出。
+    available_kb=$(LC_ALL=C df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}') || true
     if [[ -z "$available_kb" ]]; then
         llama_warn "无法获取磁盘空间信息"
         return 0

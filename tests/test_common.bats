@@ -119,11 +119,6 @@ teardown() {
 }
 
 # --- GPU Detection ---
-@test "llama_check_gpu returns 0 or 1 without crashing" {
-    run llama_check_gpu
-    [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
-}
-
 @test "llama_get_gpu_count returns a non-negative integer" {
     run llama_get_gpu_count
     [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
