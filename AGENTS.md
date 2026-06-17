@@ -38,27 +38,6 @@ source run_env.sh        # 加载运行时环境变量（必须 source，直接�
 
 所有入口脚本均支持 `--help` 和 `--version`。**测试依赖** `shellcheck` 和 `bats-core`（`make` 各目标会自动检测缺失并提示安装）。
 
-## Git 工作流
-
-本项目采用 **feature 分支 + Pull Request** 工作流，**禁止直接向 `main` 提交**。
-
-### 分支与提交约定
-
-- 从最新 `main` 创建分支：`git checkout main && git pull --ff-only && git checkout -b <type>/<描述>`
-- 分支名前缀 `<type>`：`feat`（新功能）、`fix`（修复）、`docs`（文档）、`refactor`（重构）、`test`（测试）、`chore`（构建/配置/工具）
-- 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/) 中文风格：`<type>: <描述>`（如 `docs: 完善 build.sh 注释`），并遵循 [语言策略](#语言策略)（中文描述 + 英文代码引用/路径）
-- 每个提交聚焦单一变更
-
-### PR 流程
-
-1. 本地开发完成后，先运行 `make check`（lint + syntax + test 全部通过）再推送
-2. 推送分支：`git push -u origin <type>/<描述>` —— feature 分支推送由 `.claude/settings.json` 的 `Bash(git push:*)` 规则自动放行
-3. 创建 PR：`gh pr create`（标题与首条提交一致，正文说明变更与动机）
-4. 在 GitHub 上 review + merge（单人项目可自合；建议 **squash merge** 保持线性历史）
-5. 合并后清理：`git checkout main && git pull --ff-only && git branch -d <branch>`
-
-> **为何禁止直推 main：** harness 的权限分类器对默认分支推送设有独立安全闸（绕过 PR review），即便配置了 `git push` 权限规则，每次推送 `main` 仍需单独显式授权；feature 分支推送则可自动放行。PR 工作流既契合此约束，又保留 review 与回溯点。
-
 ## 架构
 
 理解四层 source 链是高效修改的前提：
