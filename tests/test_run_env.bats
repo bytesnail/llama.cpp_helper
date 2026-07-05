@@ -89,3 +89,18 @@ load test_helper
     [ "$status" -eq 0 ]
     [ "$output" = "CLEAN" ]
 }
+
+@test "source run_env.sh survives set -e when llama_get_gpu_count fails" {
+    # 回归测试：父 shell 启用 set -e 时，gpu_count 赋值不应因
+    # llama_get_gpu_count 返回 1 而杀死父 shell（run_env.sh 的 || true 修复）。
+    # 通过覆盖 llama_get_gpu_count 模拟无 nvidia-smi 环境。
+    run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_get_gpu_count() { echo 0; return 1; }
+        source '${BATS_TEST_DIRNAME}/../run_env.sh' >/dev/null 2>&1
+        echo SURVIVED
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *SURVIVED* ]]
+}

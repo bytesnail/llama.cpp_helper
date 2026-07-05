@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（155 项）
+make test           # bats-core 测试套件（162 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -137,6 +137,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 - **退出路径**：`llama_return_or_exit` — source 上下文用 `return`，脚本上下文用 `exit`
 - **信号处理**：`llama_setup_trap <cmd>` 注册 SIGINT/SIGTERM；`llama_cleanup_trap` 重置
 - **命令包装**：`llama_run_silent` 临时禁用 `set -e` 捕获退出码，失败时输出捕获的错误信息
+- **管线赋值防护**：`var=$(cmd | cmd)` 在 `set -euo pipefail` 下，若管线可能返回非零（如 `grep` 无匹配、外部工具缺失），必须加 `|| true`——否则会中止脚本，使文档承诺的优雅降级路径（空串/0/回退）无法到达。参考 `common.sh` 中 `_llama_lscpu_field`、`llama_print_hardware_summary`、`llama_hw_cpu_*` 的实现
 - **测试提取模式**：`_LLAMA_SOURCE_ONLY=1` 允许测试 source 入口脚本时跳过锁获取和 trap 注册等副作用
 
 ## 反模式（本项目禁止）
@@ -148,6 +149,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 5. **source 脚本绝不污染父 shell 颜色变量** — 颜色变量名清单（`_LLAMA_COLOR_VARS`）在 `common.sh` 单一定义，`run_env.sh` source 后由 `llama_restore_colors` 在退出时 unset 清理
 6. **绝不启用** `GGML_CUDA_ENABLE_UNIFIED_MEMORY` — 离散 GPU（RTX 2080 Ti）有害。仅集成 GPU 或 OOM 时手动启用
 7. **绝不在测试中修改生产环境的 llama.cpp 仓库** — 所有测试操作必须在 `tests/test_helper.bash` 创建的临时目录中进行。`_setup_tmpdir()` 自动创建 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它，`teardown` 时自动清理。测试需不同仓库时显式覆盖 `LLAMA_CPP_SRC`，但不得指向 `_LLAMA_PROJECT_ROOT/../llama.cpp`（生产路径）
+8. **绝不写无保护的 `var=$(pipeline)` 赋值**（当管线可能返回非零时）— 在 `set -euo pipefail` 下，`grep` 无匹配、外部工具缺失等场景会使管线返回非零，赋值语句中止脚本。若函数设计了优雅降级（输出空串/0/回退值），必须用 `var=$(... || true)` 保护。参考 `common.sh:131,165,176,225,251,300,315,319` 和 `run_env.sh:150`
 
 ## 安全特性
 
@@ -159,8 +161,8 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 ## 注意事项
 
-- **Bash ≥ 4.2 是硬性要求**：`declare -A` 关联数组（`run_env.sh` 的 `declare -A`、`update.sh` 的 `local -A`）和 `[[ -v ]]` 变量测试（`common.sh`、`update.sh`）
-- **测试范围**：仅覆盖 CLI 接口（`--help`/`--version`/参数解析），实际构建/更新行为不在测试范围（依赖真实 CUDA 工具链和 llama.cpp 源码）
+- **Bash ≥ 4.2 是硬性要求**：`declare -A` 关联数组（`run_env.sh` 的 `declare -A`、`update.sh` 的 `local -A`）和 `[[ -v ]]` 变量测试（`common.sh`）。注：`update.sh` 的 `_cleanup_stale_submodules` 刻意用 `${arr[k]+x}` 而非 `[[ -v arr[k] ]]`，因为后者对关联数组元素需 Bash 4.3+
+- **测试范围**：覆盖 CLI 接口（`--help`/`--version`/参数解析）及可离线测试的内部函数（如 `_resolve_target`、`_rollback`、`_json_field`、硬件信息采集、`set -e` 管线防护回归等）。实际构建/更新行为（依赖真实 CUDA 工具链和 llama.cpp 源码的端到端流程）不在测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行
 - **临时补丁**：`build.sh` 的 CUDA RPATH 检测（`_detect_cuda_lib_dir` 周围，注释标记 `TODO(upstream)`）是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题），上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续

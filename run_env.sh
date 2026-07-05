@@ -145,7 +145,9 @@ main() {
     llama_activate_conda
     # 检测 GPU
     local gpu_count
-    gpu_count=$(llama_get_gpu_count)
+    # || true：llama_get_gpu_count 在无 nvidia-smi 时返回 1；run_env.sh 虽未启用 set -e，
+    # 但若父 shell 启用了 set -e，未屏蔽的失败赋值会杀死父 shell。
+    gpu_count=$(llama_get_gpu_count || true)
 
     if [[ "$gpu_count" -lt 2 ]]; then
         llama_warn "检测到 ${gpu_count} 块 GPU，P2P 优化效果有限"

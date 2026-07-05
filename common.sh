@@ -157,9 +157,12 @@ _llama_join() {
 # 解析 lscpu 输出中首个匹配字段（$1 为作用于首列的正则）的值，去前导空格。
 # lscpu 不可用时输出空串。
 _llama_lscpu_field() {
+    # || true：lscpu 不可用时（缺失/损坏）管线在 pipefail 下返回非零，
+    # 会中止 build.sh（经 llama_hw_cpu_* → llama_print_hardware_summary 调用链）。
+    # 加 || true 后，调用者会得到空串，从而触发 /proc/cpuinfo 回退或 0 回退。
     lscpu 2>/dev/null | awk -F: -v re="$1" '
         $1 ~ re { sub(/^[[:space:]]+/, "", $2); print $2; exit }
-    '
+    ' || true
 }
 
 # Usage: llama_hw_cpu_model
@@ -168,7 +171,9 @@ llama_hw_cpu_model() {
     local model
     model=$(_llama_lscpu_field "Model name")
     if [[ -z "$model" ]]; then
-        model=$(awk -F: '/^model name/ { sub(/^ +/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null)
+        # || true：/proc/cpuinfo 不可读时（容器/沙箱环境）awk 返回非零，
+        # pipefail+set -e 下会中止；加 || true 后 model 为空串，符合契约。
+        model=$(awk -F: '/^model name/ { sub(/^ +/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null || true)
     fi
     printf '%s' "$model"
 }
@@ -217,7 +222,7 @@ readonly _LLAMA_HW_CPU_FLAGS_AVX512=(
 # AVX-512 各子集合并显示为 AVX-512(F,CD,BW,...)。无 /proc/cpuinfo 时输出空串。
 llama_hw_cpu_flags() {
     local flags_line
-    flags_line=$(awk -F: '/^flags/ { sub(/^ +/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null)
+    flags_line=$(awk -F: '/^flags/ { sub(/^ +/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null || true)
     [[ -z "$flags_line" ]] && return 0
 
     local padded=" $flags_line "
@@ -243,7 +248,7 @@ llama_hw_cpu_flags() {
 # 输出内存总量（字节）；无法获取时输出 0。
 llama_hw_mem_total_bytes() {
     local kb
-    kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null)
+    kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)
     [[ "$kb" =~ ^[0-9]+$ ]] && printf '%s' $((kb * 1024)) || printf 0
 }
 
@@ -305,11 +310,13 @@ llama_print_hardware_summary() {
 
         # NVLink 拓扑：topo -m 矩阵中 GPU 间互联类型，NV# 表示 # 条 NVLink 绑定
         local max_nv
-        max_nv=$(nvidia-smi topo -m 2>/dev/null | grep -oE 'NV[0-9]+' | sort -u | tail -1)
+        # || true：PCIe-only 多 GPU 系统中 grep 找不到 NV* 条目返回 1，
+        # pipefail+set -e 下会中止 build.sh（本函数由 build.sh:268 在 set -euo pipefail 下调用）。
+        max_nv=$(nvidia-smi topo -m 2>/dev/null | grep -oE 'NV[0-9]+' | sort -u | tail -1 || true)
         if [[ -n "$max_nv" ]]; then
             local links link_bw
             links=${max_nv#NV}
-            link_bw=$(nvidia-smi nvlink --status -i 0 2>/dev/null | grep -oE '[0-9.]+ GB/s' | head -1)
+            link_bw=$(nvidia-smi nvlink --status -i 0 2>/dev/null | grep -oE '[0-9.]+ GB/s' | head -1 || true)
             if [[ -n "$link_bw" ]]; then
                 local agg
                 agg=$(awk -v b="${link_bw% GB/s}" -v n="$links" 'BEGIN{printf "%.1f", b*n}')

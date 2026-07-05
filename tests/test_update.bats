@@ -142,6 +142,14 @@ load test_helper
     [ "$output" = "b4000" ]
 }
 
+@test "_json_field returns non-zero on missing key" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    local test_json='{"tag_name":"b4000"}'
+    run _json_field "nonexistent_key" <<< "$test_json"
+    [ "$status" -ne 0 ]
+}
+
 @test "_save_state captures empty branch when detached HEAD" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 

@@ -34,6 +34,23 @@ load test_helper
     [ "$status" -eq 0 ]
 }
 
+@test "config.sh honors environment variable overrides" {
+    # config.sh uses \${VAR:-default} pattern — env vars should take precedence
+    run bash -c "
+        _LLAMA_PROJECT_ROOT='${TEST_TMPDIR}'
+        LLAMA_CPP_SRC='/custom/src/path'
+        CMAKE_BUILD_TYPE='Debug'
+        CMAKE_CUDA_ARCHITECTURES='86'
+        GGML_BLAS='OFF'
+        source '${BATS_TEST_DIRNAME}/../config.sh' 2>/dev/null
+        [[ \"\$LLAMA_CPP_SRC\" == \"/custom/src/path\" ]]
+        [[ \"\$CMAKE_BUILD_TYPE\" == \"Debug\" ]]
+        [[ \"\$CMAKE_CUDA_ARCHITECTURES\" == \"86\" ]]
+        [[ \"\$GGML_BLAS\" == \"OFF\" ]]
+    "
+    [ "$status" -eq 0 ]
+}
+
 @test "no script mixes tabs and spaces for indentation" {
     # All .sh scripts use space indentation per .editorconfig
     run bash -c "

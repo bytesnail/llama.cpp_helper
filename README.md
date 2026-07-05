@@ -176,7 +176,6 @@ bash build.sh -i    # 增量构建（保留 build 目录，仅重新编译变更
 - 检查 `llama-cli` 和 `llama-server` 二进制文件存在性及大小
 - 验证 CUDA 动态库链接（`libcudart` / `libcublas`）
 - 验证 OpenBLAS 动态库链接及运行时可加载性
-- 通过 `llama-bench --help` 检测 CUDA 设备列表
 - 验证 `llama-cli --version` 可正常启动
 - 写入构建标记（`.build-stamp`），记录当前构建对应的源码 commit
 
@@ -343,7 +342,7 @@ CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 
 ### GPU 未检测到
 
-**症状：** `llama-bench --help` 无 CUDA 设备输出，或 `--list-devices` 无输出
+**症状：** 运行 `llama-cli` 或 `llama-bench` 时无法识别 CUDA 设备
 
 **排查：**
 - `nvidia-smi` 检查驱动是否正常
@@ -378,11 +377,9 @@ git submodule update --recursive
 
 **症状：** 构建时提示 `无法自动检测 CUDA 库路径`，随后链接失败
 
-**原因：** `build.sh` 无法通过 `nvcc` 路径回溯找到 CUDA 库目录。常见于 CUDA 安装在非标准路径（如 Anaconda 环境）。
+**原因：** CUDA 安装在非标准路径（如 Anaconda 环境），`build.sh` 无法通过 `nvcc` 路径回溯找到 CUDA 库目录。
 
 **解决：**
-
-`build.sh` 的 CUDA 库路径检测依赖 `nvcc` 路径回溯。如果 CUDA 安装在非标准路径（如 Anaconda 环境）：
 
 1. 确保 `nvcc` 在 PATH 中，或通过符号链接指向正确位置：
    `readlink -f $(which nvcc)`
@@ -419,7 +416,7 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（6 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（156 项）
+make test       # bats-core 测试套件（162 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 

@@ -125,6 +125,22 @@ teardown() {
     [[ "$output" =~ ^[0-9]+$ ]]
 }
 
+@test "llama_get_gpu_count returns count from mock nvidia-smi" {
+    local mock_dir
+    mock_dir=$(mktemp -d)
+    printf '#!/bin/bash\nprintf "GPU 0\\nGPU 1\\n"\n' > "${mock_dir}/nvidia-smi"
+    chmod +x "${mock_dir}/nvidia-smi"
+
+    local _saved_path="$PATH"
+    PATH="${mock_dir}:$PATH"
+    run llama_get_gpu_count
+    PATH="$_saved_path"
+    [ "$status" -eq 0 ]
+    [ "$output" = "2" ]
+
+    rm -rf "${mock_dir}"
+}
+
 # --- File Locking ---
 @test "llama_acquire_lock succeeds on first call" {
     llama_acquire_lock
@@ -347,6 +363,19 @@ teardown() {
     "
     [ "$status" -eq 0 ]
     [[ "$output" =~ 42 ]]
+}
+
+@test "llama_run_silent forwards failed command stderr to caller" {
+    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run --separate-stderr bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        llama_run_silent bash -c 'echo FAIL_OUTPUT >&2; exit 7'
+        echo exit_code=\$?
+    "
+    [ "$status" -eq 0 ]
+    [[ "$stderr" =~ FAIL_OUTPUT ]]
+    [[ "$output" =~ 7 ]]
 }
 
 # --- Human-Readable Size ---
@@ -818,6 +847,26 @@ CONDAEOF
     [ -n "$output" ]
 }
 
+@test "llama_hw_cpu_model survives set -e when lscpu is unavailable" {
+    # 回归测试：lscpu 不可用时（缺失/损坏），_llama_lscpu_field 管线返回非零，
+    # pipefail+set -e 下会中止 build.sh。验证 || true 修复后函数回退到 /proc/cpuinfo。
+    run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        # 构造不含 lscpu 的 PATH，但保留 awk 和基本工具
+        PATH='/usr/bin:/bin'
+        hash -r 2>/dev/null || true
+        # 如果 lscpu 存在于 /usr/bin，用空函数屏蔽
+        if command -v lscpu &>/dev/null; then
+            lscpu() { return 127; }
+        fi
+        model=\$(llama_hw_cpu_model)
+        echo \"model=\${model}\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *model=* ]]
+}
+
 @test "llama_hw_cpu_sockets returns positive integer" {
     run llama_hw_cpu_sockets
     [ "$status" -eq 0 ]
@@ -875,4 +924,24 @@ CONDAEOF
     [[ "$output" =~ "硬件信息" ]]
     [[ "$output" =~ "CPU:" ]]
     [[ "$output" =~ "内存:" ]]
+}
+
+@test "llama_print_hardware_summary survives set -e on PCIe-only multi-GPU" {
+    # 回归测试：PCIe-only 多 GPU 系统中 nvidia-smi topo -m 无 NV* 条目，
+    # grep 返回 1 → pipefail 下管线失败 → set -e 中止 build.sh。
+    # 验证 || true 修复后函数能完成并输出“PCIe 互联”降级路径。
+    local mock_dir
+    mock_dir=$(mktemp -d)
+    printf '#!/bin/bash\nif [[ "$*" == *topo* ]]; then printf "\\tGPU0\\tGPU1\\nGPU0\\tX\\tSYS\\nGPU1\\tSYS\\tX\\n"; elif [[ "$*" == *query-gpu* ]]; then printf "0|RTX 2080 Ti|75|11264\\n1|RTX 2080 Ti|75|11264\\n"; else exit 0; fi\n' > "${mock_dir}/nvidia-smi"
+    chmod +x "${mock_dir}/nvidia-smi"
+
+    run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        PATH='${mock_dir}:$PATH'
+        llama_print_hardware_summary
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PCIe"* ]]
+    rm -rf "${mock_dir}"
 }
