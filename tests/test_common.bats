@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 bats_require_minimum_version 1.5.0
-# Characterization tests for common.sh — captures CURRENT behavior before refactoring
+# common.sh 的契约测试集——覆盖日志、锁、硬件信息、conda、构建健康检查等
 
 load test_helper
 
@@ -13,7 +13,9 @@ setup() {
 
 teardown() {
     if [[ -n "${LOCK_FD:-}" ]]; then
-        exec {LOCK_FD}>&- 2>/dev/null || true
+        # 不能加 2>/dev/null：无命令 exec 的重定向会永久改变当前 shell 的
+        # stderr；bash 关闭已关闭的 fd 静默返回 0，无需错误屏蔽
+        exec {LOCK_FD}>&-
     fi
     _teardown_tmpdir
 }
@@ -175,7 +177,6 @@ teardown() {
 }
 
 @test "_recover_stale_lock recovers a lock held by a dead process" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     # Create a lock file with a nonexistent PID
     echo "99999" > "${LOCK_FILE}"
     # Call directly (not via run) because LOCK_FD must survive the subshell
@@ -267,7 +268,6 @@ teardown() {
 
 # --- llama_cd_back ---
 @test "llama_cd_back returns 0 when orig_dir is unset" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     unset orig_dir
     run llama_cd_back
     [ "$status" -eq 0 ]
@@ -298,14 +298,12 @@ teardown() {
 
 # --- Init/Source/Help Helpers ---
 @test "llama_init_script_dir sets SCRIPT_DIR" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     llama_init_script_dir
     [ -n "${SCRIPT_DIR:-}" ]
     [ -d "${SCRIPT_DIR:-}" ]
 }
 
 @test "llama_show_help outputs usage with description" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_show_help "test.sh" "A test script"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "用法: test.sh" ]]
@@ -313,7 +311,6 @@ teardown() {
 }
 
 @test "llama_show_help includes options when provided" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_show_help "test.sh" "desc" "  -h  help"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "选项:" ]]
@@ -322,7 +319,6 @@ teardown() {
 
 # --- Version ---
 @test "llama_show_version outputs version string" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     source "${BATS_TEST_DIRNAME}/../config.sh" 2>/dev/null || true
     run llama_show_version
     [ "$status" -eq 0 ]
@@ -330,119 +326,140 @@ teardown() {
 }
 
 # --- llama_run_silent ---
-@test "llama_run_silent captures exit code without failing under set -e" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+# 契约：llama_run_silent 如实返回被包装命令的退出码；set -e 的调用者
+# 必须用 `llama_run_silent cmd || rc=$?`（或 if）捕获
+@test "llama_run_silent captures exit code via || under set -e" {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
-        llama_run_silent false
-        echo \$?
+        rc=0
+        llama_run_silent false || rc=\$?
+        echo \"rc=\$rc\"
     "
     [ "$status" -eq 0 ]
-    [[ "$output" =~ 1 ]]
+    [[ "$output" =~ "rc=1" ]]
 }
 @test "llama_run_silent passes through success" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        rc=0
+        llama_run_silent true || rc=\$?
+        echo \"rc=\$rc\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "rc=0" ]]
+}
+
+@test "llama_run_silent preserves exit code 42 under set -e" {
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        rc=0
+        llama_run_silent bash -c 'exit 42' || rc=\$?
+        echo \"rc=\$rc\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "rc=42" ]]
+}
+
+@test "llama_run_silent forwards failed command stderr to caller" {
+    run --separate-stderr bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        rc=0
+        llama_run_silent bash -c 'echo FAIL_OUTPUT >&2; exit 7' || rc=\$?
+        echo exit_code=\$rc
+    "
+    [ "$status" -eq 0 ]
+    [[ "$stderr" =~ FAIL_OUTPUT ]]
+    [[ "$output" =~ "exit_code=7" ]]
+}
+
+@test "llama_run_silent preserves caller errexit (regression: no silent set -e disable)" {
+    # 回归测试：prev_opts=\$(set +o) 在命令替换子 shell 中丢失 errexit
+    # （inherit_errexit 默认 off），eval 恢复曾把调用者的 set -e 永久关闭
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
         llama_run_silent true
-        echo \$?
+        llama_run_silent false || true
+        set -o | grep -q 'errexit.*on'
     "
     [ "$status" -eq 0 ]
-    [[ "$output" =~ 0 ]]
 }
 
-@test "llama_run_silent preserves exit code 42 under set -e" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+@test "llama_activate_conda preserves caller errexit after activation (regression)" {
+    # 回归测试：同一 prev_opts 缺陷的 conda 路径变体
+    local mock_e="${TEST_TMPDIR}/mock_conda_e"
+    mkdir -p "${mock_e}/etc/profile.d" "${mock_e}/bin"
+    _make_stub_exec "${mock_e}/bin/conda"
+    echo 'conda() { if [[ "$1" == "activate" ]]; then return 0; fi; }' \
+        > "${mock_e}/etc/profile.d/conda.sh"
     run bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
-        set -e
-        llama_run_silent '(exit 42)'
-        echo \$?
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        CONDA_EXE='${mock_e}/bin/conda' CONDA_AUTO_ACTIVATE=1 llama_activate_conda >/dev/null 2>&1
+        set -o | grep -q 'errexit.*on'
     "
     [ "$status" -eq 0 ]
-    [[ "$output" =~ 42 ]]
-}
-
-@test "llama_run_silent forwards failed command stderr to caller" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
-    run --separate-stderr bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
-        set -e
-        llama_run_silent bash -c 'echo FAIL_OUTPUT >&2; exit 7'
-        echo exit_code=\$?
-    "
-    [ "$status" -eq 0 ]
-    [[ "$stderr" =~ FAIL_OUTPUT ]]
-    [[ "$output" =~ 7 ]]
 }
 
 # --- Human-Readable Size ---
 @test "llama_human_size: 0 bytes returns 0B" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 0
     [ "$status" -eq 0 ]
     [ "$output" = "0B" ]
 }
 
 @test "llama_human_size: 512 bytes returns 512B" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 512
     [ "$status" -eq 0 ]
     [ "$output" = "512B" ]
 }
 
 @test "llama_human_size: 1023 bytes returns 1023B" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1023
     [ "$status" -eq 0 ]
     [ "$output" = "1023B" ]
 }
 
 @test "llama_human_size: 1024 bytes returns 1KiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1024
     [ "$status" -eq 0 ]
     [ "$output" = "1KiB" ]
 }
 
 @test "llama_human_size: 1536 bytes returns 1KiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1536
     [ "$status" -eq 0 ]
     [ "$output" = "1KiB" ]
 }
 @test "llama_human_size: 2048 bytes returns 2KiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 2048
     [ "$status" -eq 0 ]
     [ "$output" = "2KiB" ]
 }
 
 @test "llama_human_size: 1048576 bytes returns 1MiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1048576
     [ "$status" -eq 0 ]
     [ "$output" = "1MiB" ]
 }
 
 @test "llama_human_size: 1073741824 bytes returns 1.00GiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1073741824
     [ "$status" -eq 0 ]
     [ "$output" = "1.00GiB" ]
 }
 
 @test "llama_human_size: 1610612736 bytes returns 1.50GiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 1610612736
     [ "$status" -eq 0 ]
     [ "$output" = "1.50GiB" ]
 }
 
 @test "llama_human_size: 2147483648 bytes returns 2.00GiB" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_human_size 2147483648
     [ "$status" -eq 0 ]
     [ "$output" = "2.00GiB" ]
@@ -462,45 +479,38 @@ teardown() {
 
 # --- Commit SHA Validation ---
 @test "llama_is_full_commit_sha: valid 40-char lowercase hex returns 0" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_is_full_commit_sha "abcdef1234567890abcdef1234567890abcdef12"
     [ "$status" -eq 0 ]
 }
 
 @test "llama_is_full_commit_sha: valid 40-char mixed case hex returns 0" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_is_full_commit_sha "ABCDEF1234567890ABCDEF1234567890ABCDEF12"
     [ "$status" -eq 0 ]
 }
 
 @test "llama_is_full_commit_sha: short sha (< 40 chars) returns 1" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_is_full_commit_sha "abc123"
     [ "$status" -eq 1 ]
 }
 
 @test "llama_is_full_commit_sha: invalid characters returns 1" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_is_full_commit_sha "ghijklmnopqrstuvwxyzGHIJKLMNOPQRSTUVWXYZ1234"
     [ "$status" -eq 1 ]
 }
 
 @test "llama_is_full_commit_sha: empty string returns 1" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_is_full_commit_sha ""
     [ "$status" -eq 1 ]
 }
 
 # --- Return or Exit ---
 @test "llama_return_or_exit: returns given exit code in sourced context" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run bash -c "source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null; llama_return_or_exit 42; echo \$?"
     [ "$status" -eq 0 ]
     [[ "$output" =~ 42 ]]
 }
 
 @test "llama_return_or_exit: returns 0 when called with 0" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run bash -c "source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null; llama_return_or_exit 0; echo \$?"
     [ "$status" -eq 0 ]
     [[ "$output" =~ 0 ]]
@@ -508,13 +518,11 @@ teardown() {
 
 # --- Build Health ---
 @test "llama_check_build_health returns 1 when build dir does not exist" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     LLAMA_CPP_SRC="${TEST_TMPDIR}/nonexistent_llama"
     run llama_check_build_health
     [ "$status" -eq 1 ]
 }
 @test "llama_check_build_health returns 1 when binaries are missing" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     LLAMA_CPP_SRC="${TEST_TMPDIR}/fake_llama"
     REQUIRED_BINARIES=("llama-cli" "llama-server")
     mkdir -p "${LLAMA_CPP_SRC}/build/bin"
@@ -523,39 +531,17 @@ teardown() {
 }
 
 @test "llama_check_build_health returns 0 when binaries exist and stamp matches" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     LLAMA_CPP_SRC="${TEST_TMPDIR}/healthy_llama"
     REQUIRED_BINARIES=("llama-cli" "llama-server")
-    mkdir -p "${LLAMA_CPP_SRC}/build/bin"
-    touch "${LLAMA_CPP_SRC}/build/bin/llama-cli"
-    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-cli"
-    touch "${LLAMA_CPP_SRC}/build/bin/llama-server"
-    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-server"
-    git -C "${TEST_TMPDIR}/healthy_llama" init --quiet 2>/dev/null
-    git -C "${TEST_TMPDIR}/healthy_llama" add -A 2>/dev/null
-    git -C "${TEST_TMPDIR}/healthy_llama" commit -m "init" --quiet 2>/dev/null
-    local head
-    head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
-    mkdir -p "${LLAMA_CPP_SRC}/build"
-    echo "$head" > "${LLAMA_CPP_SRC}/build/.build-stamp"
+    _make_fake_built_repo "$LLAMA_CPP_SRC"
     run llama_check_build_health
     [ "$status" -eq 0 ]
 }
 
 @test "llama_check_build_health returns 1 when stamp does not match HEAD" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     LLAMA_CPP_SRC="${TEST_TMPDIR}/stale_llama"
     REQUIRED_BINARIES=("llama-cli" "llama-server")
-    mkdir -p "${LLAMA_CPP_SRC}/build/bin"
-    touch "${LLAMA_CPP_SRC}/build/bin/llama-cli"
-    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-cli"
-    touch "${LLAMA_CPP_SRC}/build/bin/llama-server"
-    chmod +x "${LLAMA_CPP_SRC}/build/bin/llama-server"
-    git -C "${TEST_TMPDIR}/stale_llama" init --quiet 2>/dev/null
-    git -C "${TEST_TMPDIR}/stale_llama" add -A 2>/dev/null
-    git -C "${TEST_TMPDIR}/stale_llama" commit -m "init" --quiet 2>/dev/null
-    mkdir -p "${LLAMA_CPP_SRC}/build"
-    echo "0000000000000000000000000000000000000000" > "${LLAMA_CPP_SRC}/build/.build-stamp"
+    _make_fake_built_repo "$LLAMA_CPP_SRC" "0000000000000000000000000000000000000000"
     run llama_check_build_health
     [ "$status" -eq 1 ]
 }
@@ -583,8 +569,7 @@ teardown() {
     local mock_base="${TEST_TMPDIR}/mock_conda"
     mkdir -p "${mock_base}/etc/profile.d"
     mkdir -p "${mock_base}/bin"
-    echo '#!/bin/bash' > "${mock_base}/bin/conda"
-    chmod +x "${mock_base}/bin/conda"
+    _make_stub_exec "${mock_base}/bin/conda"
     echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_base}'/envs/${2:-base}"; return 0; fi; }' \
         > "${mock_base}/etc/profile.d/conda.sh"
     CONDA_EXE="${mock_base}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
@@ -606,8 +591,7 @@ teardown() {
 @test "llama_activate_conda warns when conda.sh missing" {
     local mock_broken="${TEST_TMPDIR}/mock_broken"
     mkdir -p "${mock_broken}/bin"
-    echo '#!/bin/bash' > "${mock_broken}/bin/conda"
-    chmod +x "${mock_broken}/bin/conda"
+    _make_stub_exec "${mock_broken}/bin/conda"
     # Intentionally do NOT create etc/profile.d/conda.sh — simulate broken install
     CONDA_EXE="${mock_broken}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
@@ -618,8 +602,7 @@ teardown() {
     local mock_fail="${TEST_TMPDIR}/mock_fail"
     mkdir -p "${mock_fail}/etc/profile.d"
     mkdir -p "${mock_fail}/bin"
-    echo '#!/bin/bash' > "${mock_fail}/bin/conda"
-    chmod +x "${mock_fail}/bin/conda"
+    _make_stub_exec "${mock_fail}/bin/conda"
     echo 'conda() { if [[ "$1" == "activate" ]]; then echo "环境不存在" >&2; return 1; fi; }' \
         > "${mock_fail}/etc/profile.d/conda.sh"
     CONDA_EXE="${mock_fail}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
@@ -630,7 +613,6 @@ teardown() {
 
 # --- Color Save/Restore ---
 @test "llama_save_colors and llama_restore_colors preserve values" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     RED="test_red"
     GREEN="test_green"
     CYAN="test_cyan"
@@ -648,7 +630,6 @@ teardown() {
 }
 
 @test "llama_restore_colors unsets variables that were unset when saved" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     unset RED GREEN YELLOW CYAN BLUE BOLD NC
     llama_save_colors
     RED="should-disappear"
@@ -661,7 +642,6 @@ teardown() {
 }
 
 @test "llama_get_cpu_count fallback returns positive number with no PATH" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     # Mock by clearing PATH — if nproc/sysctl fail, falls back to /proc/cpuinfo or 4
     run llama_get_cpu_count
     [ "$status" -eq 0 ]
@@ -670,7 +650,6 @@ teardown() {
 }
 
 @test "log functions produce no ANSI codes when output is not a terminal" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     # Under bats, `run` pipes stdout → [[ -t 1 ]] is false → colors are empty strings
     run llama_info "test_color_output"
     [ "$status" -eq 0 ]
@@ -697,13 +676,11 @@ EOF
 }
 
 @test "llama_setup_trap returns 1 when command is empty" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_setup_trap ""
     [ "$status" -eq 1 ]
 }
 
 @test "llama_get_gpu_count returns 1 when nvidia-smi not available" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     local _saved_path="$PATH"
     PATH="/nonexistent"
     run llama_get_gpu_count
@@ -713,14 +690,12 @@ EOF
 }
 
 @test "llama_check_build_health returns 1 when LLAMA_CPP_SRC unset" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     unset LLAMA_CPP_SRC
     run llama_check_build_health
     [ "$status" -eq 1 ]
 }
 
 @test "llama_print_run_examples outputs expected content" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     SCRIPT_DIR="/fake/script/dir" run llama_print_run_examples "/fake/bin"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "run_env.sh" ]]
@@ -729,7 +704,6 @@ EOF
 }
 
 @test "llama_show_help includes examples when provided" {
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
     run llama_show_help "test.sh" "desc" "" "  example command"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "示例:" ]]
@@ -750,8 +724,7 @@ EOF
     local mock_setu="${TEST_TMPDIR}/mock_setu"
     mkdir -p "${mock_setu}/etc/profile.d"
     mkdir -p "${mock_setu}/bin"
-    echo '#!/bin/bash' > "${mock_setu}/bin/conda"
-    chmod +x "${mock_setu}/bin/conda"
+    _make_stub_exec "${mock_setu}/bin/conda"
     # Simulate conda activation script that references an unset variable
     # (like ~cuda-nvcc_activate.sh does with NVCC_PREPEND_FLAGS)
     cat > "${mock_setu}/etc/profile.d/conda.sh" <<'CONDAEOF'
@@ -776,8 +749,7 @@ CONDAEOF
     local mock_sete="${TEST_TMPDIR}/mock_sete"
     mkdir -p "${mock_sete}/etc/profile.d"
     mkdir -p "${mock_sete}/bin"
-    echo '#!/bin/bash' > "${mock_sete}/bin/conda"
-    chmod +x "${mock_sete}/bin/conda"
+    _make_stub_exec "${mock_sete}/bin/conda"
     # Simulate conda.sh where conda activate returns non-zero
     cat > "${mock_sete}/etc/profile.d/conda.sh" <<'CONDAEOF'
 conda() {
@@ -801,8 +773,7 @@ CONDAEOF
     local mock_restore="${TEST_TMPDIR}/mock_restore"
     mkdir -p "${mock_restore}/etc/profile.d"
     mkdir -p "${mock_restore}/bin"
-    echo '#!/bin/bash' > "${mock_restore}/bin/conda"
-    chmod +x "${mock_restore}/bin/conda"
+    _make_stub_exec "${mock_restore}/bin/conda"
     cat > "${mock_restore}/etc/profile.d/conda.sh" <<'CONDAEOF'
 conda() {
     if [[ "$1" == "activate" ]]; then
@@ -810,7 +781,7 @@ conda() {
     fi
 }
 CONDAEOF
-    CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run -127 bash -c "
+    CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
         llama_activate_conda
@@ -818,8 +789,11 @@ CONDAEOF
         # Verify by referencing an unset variable — should fail
         : \${_LLAMA_TEST_UNSET_VAR_XYZ}
     "
-    # Under set -u, referencing an unset variable should cause exit code > 0
-    [ "$status" -eq 127 ]
+    # set -u 下引用未绑定变量会以非零退出（具体退出码 127/1 取决于 errexit
+    # 状态，不应固化——errexit 现在被正确恢复后该码为 1，此前 127 恰恰是
+    # errexit 被静默关闭的 bug 表象）；断言非零 + 未绑定错误消息即可
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "未绑定的变量" ]]
 }
 
 # --- Hardware Info ---

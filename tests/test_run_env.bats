@@ -80,14 +80,40 @@ load test_helper
 }
 
 @test "source run_env.sh cleans up color variables (no parent shell pollution)" {
-    # 颜色变量由 common.sh 单一来源管理（_LLAMA_COLOR_VARS）；
-    # source 后由 llama_restore_colors 清理，RED 应被 unset（-v 检测，区分空串残留）。
+    # 颜色变量由 common.sh 单一来源管理（_LLAMA_COLOR_VARS）；source 时自动
+    # 保存父 shell 原值，退出时 llama_restore_colors 恢复。父 shell 原本无
+    # RED → 恢复为空串（save/restore 不区分 unset 与空串），视为无污染。
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../run_env.sh' --status >/dev/null 2>&1
-        if [[ -v RED ]]; then echo DIRTY; else echo CLEAN; fi
+        if [[ -n \"\${RED:-}\" ]]; then echo DIRTY; else echo CLEAN; fi
     "
     [ "$status" -eq 0 ]
     [ "$output" = "CLEAN" ]
+}
+
+@test "source run_env.sh restores pre-existing color variables" {
+    # 回归测试：父 shell 预设的同名颜色变量必须在退出时被恢复
+    # （原实现无 save 配对，restore 退化为 unset 销毁用户变量——已实证）
+    run bash -c "
+        RED=user_custom
+        source '${BATS_TEST_DIRNAME}/../run_env.sh' --status >/dev/null 2>&1
+        echo \"RED=\$RED\"
+    "
+    [ "$status" -eq 0 ]
+    [ "$output" = "RED=user_custom" ]
+}
+
+@test "source run_env.sh with unknown flag still restores colors under parent set -e" {
+    # 回归测试：main 经 || 捕获，即使参数错误也会执行 llama_restore_colors
+    # （原实现 main 直接返回非零，父 shell set -e 下 restore 被跳过，颜色泄漏）
+    run bash -c "
+        set -e
+        RED=user_custom
+        source '${BATS_TEST_DIRNAME}/../run_env.sh' --bogus >/dev/null 2>&1 || true
+        echo \"RED=\$RED\"
+    "
+    [ "$status" -eq 0 ]
+    [ "$output" = "RED=user_custom" ]
 }
 
 @test "source run_env.sh survives set -e when llama_get_gpu_count fails" {

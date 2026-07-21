@@ -18,12 +18,6 @@ source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
 
-# --- 文件锁定 ------------------------------------------------
-# 为测试提取而 source 时跳过设置代码
-if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
-    llama_acquire_lock || llama_die "无法获取文件锁"
-fi
-
 BUILD_SCRIPT="${SCRIPT_DIR}/build.sh"
 readonly BUILD_SCRIPT
 # --- 状态变量 ------------------------------------------------
@@ -63,14 +57,12 @@ _show_help() {
 # Usage: _save_state
 _save_state() {
     current_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
-    current_short=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD)
-    current_tag=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || echo "(无标签)")
-    local branch
-    if branch=$(git -C "$LLAMA_CPP_SRC" symbolic-ref --short HEAD 2>/dev/null); then
-        current_branch="$branch"
-    else
-        current_branch=""
-    fi
+    # 短哈希用参数展开截取（省一次 git fork）
+    current_short="${current_commit:0:7}"
+    # 无标签/无分支（detached HEAD）时留空串——原 "(无标签)" 哨兵字符串
+    # 把显示文案与逻辑判断耦合（消费点需逐个过滤哨兵）
+    current_tag=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || true)
+    current_branch=$(git -C "$LLAMA_CPP_SRC" symbolic-ref --short HEAD 2>/dev/null || true)
 }
 
 # 回滚到之前的状态
@@ -117,9 +109,10 @@ _rollback() {
 _cleanup_on_interrupt() {
     llama_warn "更新被中断，正在恢复..."
     llama_cleanup_trap
+    # 复用 _rollback 完整逻辑（含子模块残留清理与分支恢复）——原内联子集
+    # 缺少 _cleanup_stale_submodules，与显式回滚的行为已发生漂移
     if [[ -n "${current_commit:-}" ]]; then
-        git -C "$LLAMA_CPP_SRC" checkout "$current_commit" --quiet 2>/dev/null || true
-        git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null || true
+        _rollback || true
     fi
     if [[ -n "${orig_dir:-}" ]]; then
         llama_cd_back || true  # set -e 在信号处理函数内仍生效，失败不能阻断后续 safe_exit
@@ -127,12 +120,23 @@ _cleanup_on_interrupt() {
     llama_safe_exit 130
 }
 
+# Usage: _die_back [message] [exit_code]
+# 错误路径的固定配对：先恢复原工作目录，再退出
+_die_back() {
+    llama_cd_back
+    llama_die "$@"
+}
+
 # Usage: _cleanup_stale_submodules
 _cleanup_stale_submodules() {
     local -A expected_paths
+    local path
+    # ls-files --stage 的路径段以 TAB 分隔：必须用 TAB 切分提取完整路径。
+    # 原 awk '{print $NF}' 按空白分词，含空格的子模块路径被截断后
+    # 查不到 expected_paths，合法子模块会被误判为残留并 rm -rf（已实证）
     while IFS= read -r path; do
         expected_paths["$path"]=1
-    done < <(git -C "$LLAMA_CPP_SRC" ls-files --stage | grep '^160000' | awk '{print $NF}')
+    done < <(git -C "$LLAMA_CPP_SRC" ls-files --stage | sed -n 's/^160000 [0-9a-fA-F]\{40\} [0-9]\t//p')
 
     local stale_count=0
     local gitlink mod_dir
@@ -169,6 +173,16 @@ _json_field() {
     python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"
 }
 
+# Usage: _parse_release_json <field1> [field2] ...
+# 单次 python3 调用提取多个 JSON 字段，TAB 分隔输出到一行。
+# 供两个 fetcher 复用：原实现每字段起一个 python3 进程（共 4 次 fork）。
+# release 字段值（tag/SHA/ISO 日期/URL）不含 TAB 与换行，TAB 分隔安全。
+_parse_release_json() {
+    python3 -c 'import json,sys
+d = json.load(sys.stdin)
+print("\t".join(str(d[k]) for k in sys.argv[1:]))' "$@"
+}
+
 # Usage: _print_success_summary <source_updated> <current_ver> <target_ver> <release_date>
 _print_success_summary() {
     local source_updated="$1"
@@ -194,9 +208,13 @@ _print_success_summary() {
     else
         echo "  版本: ${current_ver}"
         echo "  状态: 重新构建完成"
+        # 回滚重建路径会把失败目标版本经此参数传入，不应静默丢弃
+        if [[ -n "$target_ver" ]]; then
+            echo "  备注: ${target_ver}"
+        fi
     fi
     echo
-    llama_print_run_examples "${LLAMA_CPP_SRC}/build/bin"
+    llama_print_run_examples "${BUILD_BIN_DIR:-${LLAMA_CPP_SRC}/build/bin}"
 }
 
 # --- GitHub API 查询 -----------------------------------------
@@ -206,10 +224,9 @@ _fetch_latest_release_gh() {
     if ! json=$(gh release view --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
         return 1
     fi
-    release_tag=$(printf '%s' "$json" | _json_field tagName) || return 1
-    release_commit=$(printf '%s' "$json" | _json_field targetCommitish) || return 1
-    release_date=$(printf '%s' "$json" | _json_field publishedAt) || return 1
-    release_url=$(printf '%s' "$json" | _json_field url) || return 1
+    local parsed
+    parsed=$(printf '%s' "$json" | _parse_release_json tagName targetCommitish publishedAt url) || return 1
+    IFS=$'\t' read -r release_tag release_commit release_date release_url <<< "$parsed"
 }
 
 # Usage: _fetch_latest_release_curl
@@ -242,11 +259,11 @@ _fetch_latest_release_curl() {
         return 1
     fi
 
+    # 单次 python3 提取全部字段（原每字段一个进程，共 4 次 fork）；
     # 使用 stdin 重定向，避免路径注入到 Python 字符串中
-    release_tag=$(_json_field tag_name < "$tmp") || { rm -f "$tmp"; return 1; }
-    release_commit=$(_json_field target_commitish < "$tmp") || { rm -f "$tmp"; return 1; }
-    release_date=$(_json_field published_at < "$tmp") || { rm -f "$tmp"; return 1; }
-    release_url=$(_json_field html_url < "$tmp") || { rm -f "$tmp"; return 1; }
+    local parsed
+    parsed=$(_parse_release_json tag_name target_commitish published_at html_url < "$tmp") || { rm -f "$tmp"; return 1; }
+    IFS=$'\t' read -r release_tag release_commit release_date release_url <<< "$parsed"
 
     rm -f "$tmp"
 }
@@ -288,6 +305,7 @@ _check_local_repo() {
     llama_check_commands \
         git "git" \
         python3 "python3" \
+        flock "util-linux" \
         && llama_ok "基础工具检查通过" || llama_die "基础工具检查失败"
 
     llama_check_dir "$LLAMA_CPP_SRC" "llama.cpp 仓库" || llama_die
@@ -297,23 +315,34 @@ _check_local_repo() {
     llama_info "检查本地仓库状态..."
 
     orig_dir="$(pwd)"
-    cd "$LLAMA_CPP_SRC" >/dev/null
+    if ! cd "$LLAMA_CPP_SRC" >/dev/null; then
+        llama_err "无法进入 llama.cpp 仓库: ${LLAMA_CPP_SRC}"
+        _die_back
+    fi
+    # 转为绝对路径：用户以相对路径覆盖（如 LLAMA_CPP_SRC=./llama.cpp）时，
+    # cd 之后相对路径会从仓库内部解析而失效，后续 git -C 全部失败（已实证）
+    LLAMA_CPP_SRC="$(pwd)"
     # 注意：此处 cd 改变全局工作目录。后续函数（_update_source, _rollback 等）
     # 运行 git 命令时不带 -C，依赖此工作目录。所有错误路径必须调用
-    # llama_cd_back 恢复原始目录。重构为 git -C 需要修改约 15 处调用。
-    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    # llama_cd_back（或 _die_back）恢复原始目录。重构为 git -C 需要修改约 15 处调用。
+    # --untracked-files=no：未跟踪文件（补丁/笔记/core dump）不会被 checkout
+    # 触碰（git 自身也会拒绝覆盖），不应以"未提交的更改"为由阻断更新
+    if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
-        git status --short
-        llama_cd_back
-        llama_die "存在未提交的更改，请先处理后再更新"
+        git status --short --untracked-files=no
+        _die_back "存在未提交的更改，请先处理后再更新"
     fi
 
     # 检查子模块中的未提交更改
-    if git submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null | grep -q 'DIRTY'; then
+    # 先完整收集输出再 grep：直接 foreach | grep -q 时，grep -q 提前退出
+    # 会让 foreach 收到 SIGPIPE(141)，pipefail 下管线返回 141 → if 条件
+    # 为假 → 多个子模块且靠前为脏时脏检查被静默跳过（已实证）
+    local submodule_status
+    submodule_status=$(git submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null || true)
+    if grep -q 'DIRTY' <<< "$submodule_status"; then
         llama_err "子模块中存在未提交的更改，请先处理后再更新:"
         git submodule foreach 'git status --short' 2>/dev/null || true
-        llama_cd_back
-        llama_die "子模块中存在未提交的更改，请先处理后再更新"
+        _die_back "子模块中存在未提交的更改，请先处理后再更新"
     fi
 
     _save_state
@@ -334,7 +363,7 @@ _check_local_repo() {
 
     llama_ok "本地仓库状态正常"
     llama_detail "当前 Commit: ${current_short}"
-    llama_detail "当前标签:    ${current_tag}"
+    llama_detail "当前标签:    ${current_tag:-(无标签)}"
 }
 
 # Usage: _resolve_target
@@ -369,13 +398,9 @@ _resolve_target() {
     fi
 
     # 显示版本信息
-    if [[ ${#release_commit} -ge 7 ]]; then
-        release_short="${release_commit:0:7}"
-    elif [[ -n "${release_commit:-}" ]]; then
-        release_short="${release_commit}"
-    else
-        release_short="unknown"
-    fi
+    # bash 子串对短字符串天然返回整串；空值显示 unknown
+    release_short="${release_commit:0:7}"
+    : "${release_short:=unknown}"
     llama_detail "目标版本:    ${release_tag}"
     if [[ -n "$release_commit" ]] && llama_is_full_commit_sha "$release_commit"; then
         llama_detail "对应 Commit: ${release_short} (${release_commit})"
@@ -393,10 +418,8 @@ _resolve_target() {
     if [[ "${current_tag}" = "${release_tag}" ]]; then
         llama_ok "本地已在该版本 (${release_tag})，无需更新源码"
         need_source_update=0
-    elif llama_is_full_commit_sha "${release_commit}" && [[ "$current_commit" = "$release_commit" ]]; then
-        llama_ok "本地已是最新 commit (${release_short})，无需更新源码"
-        need_source_update=0
     elif [[ ${#release_commit} -ge 7 ]] && [[ "$(git -C "$LLAMA_CPP_SRC" rev-parse --verify "${release_commit}^{commit}" 2>/dev/null)" == "$current_commit" ]]; then
+        # 一条路径同时覆盖完整 SHA 与可解析 commitish（分支名/短 SHA）
         llama_ok "本地已是最新 commit (${release_short})，无需更新源码"
         need_source_update=0
     fi
@@ -410,7 +433,7 @@ _resolve_target() {
         fi
         llama_warn "当前构建缺失或与源码不匹配，需要重新构建"
     else
-        llama_warn "需要更新: ${current_short} (${current_tag}) → ${release_tag}"
+        llama_warn "需要更新: ${current_short} (${current_tag:-(无标签)}) → ${release_tag}"
     fi
 }
 
@@ -419,21 +442,34 @@ _update_source() {
     llama_check_disk_space "$LLAMA_CPP_SRC" || { llama_cd_back; llama_die; }
     llama_info "正在从远程仓库拉取最新引用..."
 
-    llama_with_network_context "从远程仓库拉取标签" git fetch origin --quiet --tags || {
+    # GIT_HTTP_LOW_SPEED_*：网络半挂起（连接建立但对端不响应）时中止传输，
+    # 而非无限期持锁阻塞后续 build.sh/update.sh
+    llama_with_network_context "从远程仓库拉取标签" \
+        env GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT}" \
+            GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME}" \
+            git fetch origin --quiet --tags || {
         llama_cd_back
         llama_die "从远程仓库拉取失败"
     }
 
-    # 尝试拉取特定标签（如果是标签）
-    if git ls-remote --tags origin "refs/tags/${release_tag}" 2>/dev/null | grep -q "refs/tags/${release_tag}"; then
-        local tag_fetch_rc=0
-        git fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" || tag_fetch_rc=$?
-        if [[ "$tag_fetch_rc" -ne 0 ]]; then
-            llama_detail "特定标签 ref fetch 失败 (退出码: ${tag_fetch_rc})，将使用已拉取的标签"
-        fi
+    # 本地解析优先：fetch --tags 已拉取全部标签，绝大多数情况下无需
+    # 再做 git ls-remote 网络往返；仅本地缺失时才精确拉取该标签。
+    # 解析到 SHA（refs/tags/ 全路径）而非直接使用 tag 名——本地存在同名
+    # 分支时 git checkout <name> 按歧义规则优先取分支，会静默构建错误
+    # commit（已实证），且 rev-parse 阶段对裸名也无法可靠消歧
+    local target_sha
+    if ! target_sha=$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null); then
+        llama_detail "本地未找到标签 ${release_tag}，尝试精确拉取..."
+        git fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" 2>/dev/null || true
+        target_sha=$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null || true)
     fi
 
-    if ! git rev-parse --verify "${release_tag}^{commit}" &>/dev/null; then
+    # 用户指定的可能是裸 commit SHA（无对应标签）：回退按 rev 解析
+    if [[ -z "$target_sha" ]] && llama_is_full_commit_sha "$release_tag"; then
+        target_sha=$(git rev-parse --verify --quiet "${release_tag}^{commit}" 2>/dev/null || true)
+    fi
+
+    if [[ -z "$target_sha" ]]; then
         llama_err "本地找不到目标版本: ${release_tag}"
         llama_detail "请确认版本号正确，或检查网络连接"
         llama_cd_back
@@ -442,23 +478,28 @@ _update_source() {
 
     llama_info "切换到版本 ${release_tag}..."
 
-    if ! git checkout "${release_tag}" --quiet; then
+    if ! git checkout --quiet "$target_sha"; then
         llama_err "切换到版本 ${release_tag} 失败"
         llama_cd_back
-        _rollback
+        _rollback || true
         llama_die "版本切换失败"
     fi
 
     actual_commit=$(git rev-parse HEAD)
-    actual_tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
+    actual_tag=$(git describe --tags --exact-match 2>/dev/null || true)
 
     if [[ -n "$actual_tag" && "$actual_tag" != "$release_tag" ]]; then
         llama_warn "checkout 后标签不一致 (期望: ${release_tag}, 实际: ${actual_tag})"
     fi
 
-    if llama_is_full_commit_sha "${release_commit}" && [[ "$actual_commit" != "$release_commit" ]]; then
-        llama_warn "checkout commit (${actual_commit:0:7}) 与 API 返回的 commitish (${release_short}) 不一致"
-        llama_warn "但标签 ${release_tag} 已确认 checkout 成功，继续构建..."
+    # 一致性校验（无条件执行）：checkout 结果必须与解析的目标 SHA 一致。
+    # 原实现仅在 release_commit 为 40 位 SHA 时校验，用户指定 tag 与
+    # gh 查询（targetCommitish 为分支名）两条主路径下校验均不生效
+    if [[ "$actual_commit" != "$target_sha" ]]; then
+        llama_err "checkout commit (${actual_commit:0:7}) 与目标 (${target_sha:0:7}) 不一致"
+        llama_cd_back
+        _rollback || true
+        llama_die "版本切换校验失败"
     fi
 
     llama_ok "源码已更新到 ${release_tag} (${actual_commit:0:7})"
@@ -470,14 +511,32 @@ _update_source() {
     if [[ -f ".gitmodules" ]]; then
         if ! git submodule update --init --recursive --quiet; then
             llama_err "子模块同步失败"
-            _rollback
-            llama_cd_back
-            llama_die "子模块同步失败，已回滚到 ${current_short}"
+            # || true：_rollback 部分失败返回 1 时 set -e 会中止脚本，
+            # 导致下方 die 的诊断消息无法输出（退出码由 die 保证）
+            _rollback || true
+            _die_back "子模块同步失败，已回滚到 ${current_short}"
         fi
         llama_ok "子模块已同步"
     else
         llama_info "当前版本无子模块，跳过"
     fi
+}
+
+# Usage: _print_recovery_steps
+# 输出回滚/重建失败后的当前状态与手动恢复指引
+_print_recovery_steps() {
+    local current_head
+    current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD 2>/dev/null || echo "未知")
+    llama_detail "当前状态:"
+    llama_detail "  当前 HEAD: ${current_head}"
+    llama_detail "  原始版本: ${current_short} (${current_tag:-(无标签)})"
+    llama_detail "  目标版本: ${release_tag}"
+    llama_detail "恢复步骤:"
+    llama_detail "  cd ${LLAMA_CPP_SRC}"
+    llama_detail "  git status"
+    llama_detail "  git checkout ${current_commit}"
+    llama_detail "  git submodule update --recursive"
+    llama_detail "  bash ${BUILD_SCRIPT}"
 }
 
 # Usage: _build_with_rollback
@@ -491,37 +550,36 @@ _build_with_rollback() {
     # 在启动 build.sh 前释放锁 — build.sh 会获取自己的锁，
     # 同时持有两个锁会导致死锁（同一锁文件、同一 UID）。
     llama_release_lock
-    llama_run_silent bash "$BUILD_SCRIPT"
-    local build_status=$?
+    # llama_run_silent 如实返回退出码；set -e 下必须用 || 捕获，
+    # 否则构建失败会直接中止脚本，下方回滚逻辑全部成为死代码
+    local build_status=0
+    llama_run_silent bash "$BUILD_SCRIPT" || build_status=$?
 
     # 更新前的版本优先使用 tag，获取不到时回退到 commit id
-    local before_ver
-    if [[ -n "${current_tag}" && "${current_tag}" != "(无标签)" ]]; then
-        before_ver="${current_tag}"
-    else
-        before_ver="${current_short}"
-    fi
+    local before_ver="${current_tag:-$current_short}"
 
     if [[ "$build_status" -ne 0 ]]; then
-        _rollback || true
+        # 回滚修改源码树：重新取锁防止与并发 build/update 交错
+        # （锁已在上方释放）；取锁失败不阻塞回滚（安全路径必须执行）
+        if ! llama_acquire_lock; then
+            llama_warn "无法重新获取锁，回滚将在无锁保护下进行"
+        fi
+        if ! _rollback; then
+            # 回滚失败时绝不能继续在此源码上重建——重建侥幸成功会
+            # 谎报"已回滚"并显示旧版本号（实际 HEAD 仍是新版本）
+            llama_err "回滚失败，当前 HEAD 仍停留在 ${release_tag}"
+            _print_recovery_steps
+            llama_cd_back
+            llama_die "回滚失败，请手动恢复到 ${current_short} 后重试"
+        fi
+        llama_release_lock
         llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
         llama_step "回滚后重新构建..."
-        llama_run_silent bash "$BUILD_SCRIPT"
-        local rollback_build_status=$?
+        local rollback_build_status=0
+        llama_run_silent bash "$BUILD_SCRIPT" || rollback_build_status=$?
         if [[ "$rollback_build_status" -ne 0 ]]; then
             llama_err "回滚后构建也失败"
-            llama_detail "当前状态:"
-            local current_head
-            current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse --short HEAD 2>/dev/null || echo "未知")
-            llama_detail "  当前 HEAD: ${current_head}"
-            llama_detail "  原始版本: ${current_short} (${current_tag})"
-            llama_detail "  目标版本: ${release_tag}"
-            llama_detail "恢复步骤:"
-            llama_detail "  cd ${LLAMA_CPP_SRC}"
-            llama_detail "  git status"
-            llama_detail "  git checkout ${current_commit}"
-            llama_detail "  git submodule update --recursive"
-            llama_detail "  bash ${BUILD_SCRIPT}"
+            _print_recovery_steps
             llama_cd_back
             llama_die "回滚后构建也失败，请手动恢复到 ${current_short} 后重试"
         fi
@@ -541,6 +599,8 @@ _build_with_rollback() {
 main() {
     llama_step "llama.cpp 一键更新脚本"
     _parse_args "$@"
+    # 文件锁在参数解析之后获取（--help/--version 不受锁占用影响）
+    llama_acquire_lock || llama_die "无法获取文件锁"
     llama_activate_conda  # 激活 conda 环境（确保 python3/git 等可用）
     _check_local_repo
     _resolve_target

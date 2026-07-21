@@ -63,8 +63,7 @@ load test_helper
     local fake_cuda="${TEST_TMPDIR}/fake_cuda"
     local nvcc_bin="${fake_cuda}/bin"
     mkdir -p "$nvcc_bin/../lib64"
-    echo '#!/bin/bash' > "${nvcc_bin}/nvcc"
-    chmod +x "${nvcc_bin}/nvcc"
+    _make_stub_exec "${nvcc_bin}/nvcc"
     touch "${nvcc_bin}/../lib64/libcudart.so"
     mkdir -p "${nvcc_bin}/../targets/x86_64-linux/lib"
     touch "${nvcc_bin}/../targets/x86_64-linux/lib/libcudart.so"
@@ -101,8 +100,7 @@ load test_helper
     local fake_bin="${TEST_TMPDIR}/fake_bin_cublas"
     mkdir -p "$fake_bin"
     local fake_binary="${fake_bin}/llama-cli"
-    echo '#!/bin/bash' > "$fake_binary"
-    chmod +x "$fake_binary"
+    _make_stub_exec "$fake_binary"
 
     # Stub ldd inside the run subshell so the function dies with it
     run bash -c "_LLAMA_SOURCE_ONLY=1 source \"${BATS_TEST_DIRNAME}/../build.sh\"; ldd() { echo 'libcublas.so.12 => /usr/lib/x86_64-linux-gnu/libcublas.so.12'; }; _verify_openblas_linking \"${fake_bin}\""
@@ -114,8 +112,7 @@ load test_helper
     local fake_bin="${TEST_TMPDIR}/fake_bin_openblas"
     mkdir -p "$fake_bin"
     local fake_binary="${fake_bin}/llama-cli"
-    echo '#!/bin/bash' > "$fake_binary"
-    chmod +x "$fake_binary"
+    _make_stub_exec "$fake_binary"
 
     # Stub ldd inside the run subshell so the function dies with it
     run bash -c "_LLAMA_SOURCE_ONLY=1 source \"${BATS_TEST_DIRNAME}/../build.sh\"; ldd() { echo 'libopenblas.so.0 => /usr/lib/x86_64-linux-gnu/libopenblas.so.0'; }; _verify_openblas_linking \"${fake_bin}\""

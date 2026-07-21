@@ -233,13 +233,13 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 | `GGML_NATIVE` | `ON` | 本机 CPU 优化 |
 | `GGML_BLAS` | `ON` | 启用 BLAS |
 | `GGML_BLAS_VENDOR` | `OpenBLAS` | BLAS 库供应商 |
+| `GGML_CUDA` | `ON` | 启用 CUDA 支持 |
+| `LLAMA_BUILD_TESTS` | `OFF` | 构建 llama.cpp 自身测试（默认 OFF 节省编译时间） |
 
-**固定构建选项**（不可通过环境变量覆盖；`LLAMA_BUILD_TESTS` 和 `GGML_CUDA` 在 `build.sh` 中硬编码，`REQUIRED_BINARIES` 定义于 `config.sh`）：
+**固定构建选项**（不可通过环境变量覆盖；`REQUIRED_BINARIES` 定义于 `config.sh`）：
 
 | 选项 | 值 | 说明 |
 |------|-----|------|
-| `LLAMA_BUILD_TESTS` | `OFF` | 禁用测试构建（节省编译时间） |
-| `GGML_CUDA` | `ON` | 始终启用 CUDA 支持 |
 | `REQUIRED_BINARIES` | `llama-cli` `llama-server` | 必需验证的二进制文件列表 |
 
 **内部常量**（定义于 `config.sh`，由脚本逻辑使用）：
@@ -249,6 +249,7 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 | `REPO` | `ggml-org/llama.cpp` | GitHub 仓库标识（update.sh 查询） |
 | `REPO_URL` | `https://github.com/ggml-org/llama.cpp` | GitHub 仓库 URL（update.sh remote 验证） |
 | `_LLAMA_PROJECT_ROOT` | 自动检测 | 本项目的绝对路径（用于计算默认 `LLAMA_CPP_SRC`） |
+| `BUILD_DIR` / `BUILD_BIN_DIR` / `BUILD_STAMP` | `${LLAMA_CPP_SRC}/build` 及其子路径 | 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议） |
 **使用示例：**
 
 ```bash
@@ -416,7 +417,7 @@ sudo apt install util-linux  # Debian/Ubuntu
 make help       # 显示可用目标（等同于 make）
 make lint       # ShellCheck 静态分析（6 个脚本）
 make syntax     # bash -n 语法检查
-make test       # bats-core 测试套件（162 项）
+make test       # bats-core 测试套件（166 项）
 make check      # lint + syntax + test 全部
 make all        # 等同于 check
 

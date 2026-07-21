@@ -40,11 +40,8 @@ load test_helper
 }
 
 @test "update.sh reports version switch failure on non-existent target" {
-    # Create a fake llama.cpp repo to pass _check_local_repo
+    # test_helper 已在 LLAMA_CPP_SRC 建好最小 git 仓库（含 identity 与初始 commit）
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
-    mkdir -p "${fake_repo}"
-    git -C "${fake_repo}" init -q
-    git -C "${fake_repo}" commit --allow-empty -q -m "init"
     git -C "${fake_repo}" remote add origin "file:///tmp/nonexistent-git-repo-$$"
 
     # Sync origin URL to match REPO_URL check (remote mismatch only warns, doesn't fail)
@@ -57,11 +54,8 @@ load test_helper
 }
 
 @test "_save_state sets current_branch after sourcing" {
-    # Create a fake llama.cpp repo on a branch
+    # test_helper 已在 LLAMA_CPP_SRC 建好最小 git 仓库
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
-    mkdir -p "${fake_repo}"
-    git -C "${fake_repo}" init -q
-    git -C "${fake_repo}" commit --allow-empty -q -m "init"
     git -C "${fake_repo}" checkout -q -b test-branch
 
     # Source update.sh in test-only mode to load _save_state
@@ -75,8 +69,7 @@ load test_helper
 @test "_print_success_summary outputs expected format" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
-    # llama_print_run_examples needs SCRIPT_DIR
-    llama_init_script_dir
+    # SCRIPT_DIR 已由 update.sh 顶层设置（readonly），llama_print_run_examples 直接使用
 
     current_short="abc1234"
     release_tag="b4000"
@@ -93,8 +86,7 @@ load test_helper
     # Create a minimal git repo with a .gitmodules file (no stale entries)
     local fake_repo="${TEST_TMPDIR}/clean_repo"
     mkdir -p "$fake_repo"
-    git -C "$fake_repo" init -q
-    git -C "$fake_repo" commit --allow-empty -q -m "init"
+    _init_git_repo "$fake_repo"
     # Create a valid submodule entry to make find not prune everything
     mkdir -p "${fake_repo}/sub"
     touch "${fake_repo}/sub/.git"  # regular file, not gitdir ref — won't match grep
@@ -112,8 +104,7 @@ load test_helper
 
     local fake_repo="${TEST_TMPDIR}/stale_repo"
     mkdir -p "$fake_repo"
-    git -C "$fake_repo" init -q
-    git -C "$fake_repo" commit --allow-empty -q -m "init"
+    _init_git_repo "$fake_repo"
 
     # Create a stale .git file (gitdir ref pattern) in a subdirectory
     mkdir -p "${fake_repo}/old_sub"
@@ -155,8 +146,7 @@ load test_helper
 
     local fake_repo="${TEST_TMPDIR}/detached_repo"
     mkdir -p "$fake_repo"
-    git -C "$fake_repo" init -q
-    git -C "$fake_repo" commit --allow-empty -q -m "init"
+    _init_git_repo "$fake_repo"
     # Checkout a detached HEAD
     local commit_sha
     commit_sha=$(git -C "$fake_repo" rev-parse HEAD)
@@ -170,7 +160,7 @@ load test_helper
 
 @test "_print_success_summary with source_updated=0 shows rebuild message" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
-    llama_init_script_dir
+    # SCRIPT_DIR 已由 update.sh 顶层设置（readonly）
 
     run _print_success_summary 0 "abc1234" "b4000" ""
     [ "$status" -eq 0 ]
@@ -182,8 +172,7 @@ load test_helper
 
     local fake_repo="${TEST_TMPDIR}/rollback_test"
     mkdir -p "$fake_repo"
-    git -C "$fake_repo" init -q
-    git -C "$fake_repo" commit --allow-empty -q -m "first"
+    _init_git_repo "$fake_repo"
     local first_commit
     first_commit=$(git -C "$fake_repo" rev-parse HEAD)
     git -C "$fake_repo" commit --allow-empty -q -m "second"
@@ -208,7 +197,13 @@ load test_helper
 @test "update.sh without args shows error when repo missing (not just banner)" {
     # This test verifies that the script doesn't silently exit after the banner
     # (regression test for set -u crash in conda activation)
-    run bash "${BATS_TEST_DIRNAME}/../update.sh"
+    # mock 网络层（gh/curl 必失败），避免真实访问 GitHub API：
+    # 在线时消耗 API 限额，离线时按 CURL_MAX_TIME 阻塞最长 30 秒
+    local mock_dir="${TEST_TMPDIR}/net_mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH" run bash "${BATS_TEST_DIRNAME}/../update.sh"
     # Should exit non-zero
     [ "$status" -ne 0 ]
     # Should show the banner
@@ -353,23 +348,9 @@ INNER_EOF
 @test "_fetch_latest_release_curl parses curl JSON response correctly" {
     local mock_dir inner
     mock_dir=$(mktemp -d)
-    # mock curl: 解析 -o 参数写入 mock JSON，输出 HTTP 200
-    cat > "${mock_dir}/curl" << 'MOCK_EOF'
-#!/bin/bash
-tmp_file=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o) tmp_file="$2"; shift 2 ;;
-        -w) shift 2 ;;
-        -H) shift 2 ;;
-        --*) shift ;;
-        *) shift ;;
-    esac
-done
-printf '%s' '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}' > "$tmp_file"
-echo "200"
-MOCK_EOF
-    chmod +x "${mock_dir}/curl"
+    # mock curl：解析 -o 参数写入 mock JSON，输出 HTTP 200
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}')"
 
     inner="${mock_dir}/test_inner.sh"
     {
@@ -393,7 +374,8 @@ INNER_EOF
     [[ "$output" == *"date=2026-02-20T08:00:00Z"* ]]
     [[ "$output" == *"url=https://github.com/ggml-org/llama.cpp/releases/tag/b4001"* ]]
 
-    # 验证 RETURN trap 清理了临时文件
+    # 验证临时文件已清理（实现为每条退出路径显式 rm -f，非 RETURN trap——
+    # bash RETURN trap 会全局泄漏，见 update.sh 中该决策的注释）
     ! ls "${TMPDIR:-/tmp}/llama_release."*.json 2>/dev/null
 
     rm -rf "${mock_dir}"
@@ -402,23 +384,9 @@ INNER_EOF
 @test "_fetch_latest_release_curl returns 1 on HTTP failure" {
     local mock_dir inner
     mock_dir=$(mktemp -d)
-    # mock curl: 输出 HTTP 403
-    cat > "${mock_dir}/curl" << 'MOCK_EOF'
-#!/bin/bash
-tmp_file=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o) tmp_file="$2"; shift 2 ;;
-        -w) shift 2 ;;
-        -H) shift 2 ;;
-        --*) shift ;;
-        *) shift ;;
-    esac
-done
-echo '{"message":"Forbidden"}' > "$tmp_file"
-echo "403"
-MOCK_EOF
-    chmod +x "${mock_dir}/curl"
+    # mock curl：输出 HTTP 403
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 403 '{"message":"Forbidden"}')"
 
     inner="${mock_dir}/test_inner.sh"
     {
@@ -440,23 +408,9 @@ INNER_EOF
 @test "_fetch_latest_release_curl returns 1 on invalid JSON" {
     local mock_dir inner
     mock_dir=$(mktemp -d)
-    # mock curl: HTTP 200 但返回无效 JSON
-    cat > "${mock_dir}/curl" << 'MOCK_EOF'
-#!/bin/bash
-tmp_file=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o) tmp_file="$2"; shift 2 ;;
-        -w) shift 2 ;;
-        -H) shift 2 ;;
-        --*) shift ;;
-        *) shift ;;
-    esac
-done
-echo 'this is not json at all' > "$tmp_file"
-echo "200"
-MOCK_EOF
-    chmod +x "${mock_dir}/curl"
+    # mock curl：HTTP 200 但返回无效 JSON
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 'this is not json at all')"
 
     inner="${mock_dir}/test_inner.sh"
     {

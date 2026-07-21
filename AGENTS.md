@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（162 项）
+make test           # bats-core 测试套件（166 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -112,8 +112,9 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 其他跨模块变量例外：
 - `orig_dir`：由 `update.sh` 设置，`llama_cd_back()` 读取。
-- `incremental` 和 `_CLEANUP_DONE`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。
+- `incremental`、`_CLEANUP_DONE` 和 `_BUILD_TOUCHED`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。
 - `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
+- `update.sh` 的更新流程状态变量（`release_tag`、`release_commit`、`release_date`、`release_url`、`release_short`、`current_commit`、`current_short`、`current_tag`、`current_branch`、`target_version`、`need_source_update`、`skip_update`、`actual_commit`、`actual_tag`）：由 `_save_state`/`_parse_args`/`_resolve_target`/`_update_source` 设置，`_rollback`/`_build_with_rollback`/`main` 等跨函数读取，与上述性质相同，故同样使用 `lowercase_snake_case` 脚本级变量。
 
 ## 日志规范
 
@@ -134,9 +135,10 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 - **source 脚本**：`common.sh` 条件启用严格模式；`run_env.sh` 不启用（防止杀死父 shell）
 - **防重复 source**：`_LLAMA_*_SOURCED` 守卫，二次 source 时 `return 0`
 - **防直接执行**：`run_env.sh`、`config.sh` 检测 `BASH_SOURCE[0] == $0` 并报错
-- **退出路径**：`llama_return_or_exit` — source 上下文用 `return`，脚本上下文用 `exit`
-- **信号处理**：`llama_setup_trap <cmd>` 注册 SIGINT/SIGTERM；`llama_cleanup_trap` 重置
-- **命令包装**：`llama_run_silent` 临时禁用 `set -e` 捕获退出码，失败时输出捕获的错误信息
+- **退出路径**：`llama_return_or_exit` — 用 `BASH_SOURCE[1] == $0` 判断上下文：脚本上下文 `exit`，source 上下文 `return`（函数体内 `return` 永远合法，不能靠 return 失败检测）
+- **信号处理**：`llama_setup_trap <cmd>` 注册 SIGINT/SIGTERM；`llama_cleanup_trap` 重置。`build.sh` 的信号 trap 显式传入退出码（`trap '_cleanup_on_exit 130' SIGINT`）——信号在 builtin 间隙到达时 `$?` 可能为 0，会跳过清理并以 0 退出（下游误判构建成功）
+- **命令包装**：`llama_run_silent` 临时禁用 `set -e` 运行命令并**如实返回其退出码**——`set -e` 的调用者必须用 `llama_run_silent cmd || rc=$?`（或 `if`）捕获，否则非零返回会中止脚本、错误处理成为死代码
+- **保存/恢复 errexit 必须用 `$-`**：绝不能用 `prev_opts=$(set +o)` 保存 shell 选项——bash 默认在命令替换子 shell 中重置 errexit（`shopt inherit_errexit` 默认 off），捕获到的恒为 `set +o errexit`，`eval` 恢复后会把调用者的 `set -e` 永久静默关闭。正确写法：`if [[ $- == *e* ]]; then restore_e=1; fi`（`$-` 在当前 shell 读取，`||`/`if` 豁免上下文中仍正确）。参考 `llama_run_silent`、`llama_activate_conda`
 - **管线赋值防护**：`var=$(cmd | cmd)` 在 `set -euo pipefail` 下，若管线可能返回非零（如 `grep` 无匹配、外部工具缺失），必须加 `|| true`——否则会中止脚本，使文档承诺的优雅降级路径（空串/0/回退）无法到达。参考 `common.sh` 中 `_llama_lscpu_field`、`llama_print_hardware_summary`、`llama_hw_cpu_*` 的实现
 - **测试提取模式**：`_LLAMA_SOURCE_ONLY=1` 允许测试 source 入口脚本时跳过锁获取和 trap 注册等副作用
 
@@ -146,18 +148,20 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 2. **绝不在 source 脚本中无条件启用** `set -euo pipefail` — 会导致父 shell 退出
 3. **绝不删除锁文件** — `flock` 基于 inode，删除会导致等待进程锁住已删除 inode。`llama_release_lock` 只关 FD
 4. **绝不在 Python 中嵌入字段名** — 使用 `sys.argv[1]` 传递字段名避免 Python 注入（参考 `_json_field`）
-5. **source 脚本绝不污染父 shell 颜色变量** — 颜色变量名清单（`_LLAMA_COLOR_VARS`）在 `common.sh` 单一定义，`run_env.sh` source 后由 `llama_restore_colors` 在退出时 unset 清理
+5. **source 脚本绝不污染父 shell 颜色变量** — 颜色变量名清单（`_LLAMA_COLOR_VARS`）在 `common.sh` 单一定义；`common.sh` 被 source 时先自动 `llama_save_colors` 保存父 shell 原值，`run_env.sh` 退出时由 `llama_restore_colors` 恢复（unset 与空串不做区分，恢复为空串）
 6. **绝不启用** `GGML_CUDA_ENABLE_UNIFIED_MEMORY` — 离散 GPU（RTX 2080 Ti）有害。仅集成 GPU 或 OOM 时手动启用
 7. **绝不在测试中修改生产环境的 llama.cpp 仓库** — 所有测试操作必须在 `tests/test_helper.bash` 创建的临时目录中进行。`_setup_tmpdir()` 自动创建 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它，`teardown` 时自动清理。测试需不同仓库时显式覆盖 `LLAMA_CPP_SRC`，但不得指向 `_LLAMA_PROJECT_ROOT/../llama.cpp`（生产路径）
-8. **绝不写无保护的 `var=$(pipeline)` 赋值**（当管线可能返回非零时）— 在 `set -euo pipefail` 下，`grep` 无匹配、外部工具缺失等场景会使管线返回非零，赋值语句中止脚本。若函数设计了优雅降级（输出空串/0/回退值），必须用 `var=$(... || true)` 保护。参考 `common.sh:131,165,176,225,251,300,315,319` 和 `run_env.sh:150`
+8. **绝不写无保护的 `var=$(pipeline)` 赋值**（当管线可能返回非零时）— 在 `set -euo pipefail` 下，`grep` 无匹配、外部工具缺失等场景会使管线返回非零，赋值语句中止脚本。若函数设计了优雅降级（输出空串/0/回退值），必须用 `var=$(... || true)` 保护。参考 `common.sh` 的 `_llama_lscpu_field`、`llama_get_gpu_count`、`llama_hw_mem_total_bytes`、`llama_print_hardware_summary` 和 `run_env.sh` 的 `gpu_count=$(llama_get_gpu_count || true)`
+9. **绝不给无命令的 `exec {fd}>&-` 加输出重定向**（如 `2>/dev/null`）— 无命令 `exec` 的重定向会**永久改变当前 shell 的 FD**（实测吞掉后续全部 stderr 输出，含 `llama_safe_exit` 前的错误消息）。bash 关闭已关闭的 fd 静默返回 0，无需屏蔽。参考 `llama_release_lock`、`_lock_grab`、测试 teardown
+10. **绝不用 `git checkout <tag名>` 切换版本** — 本地存在同名分支时 git 按歧义规则优先取分支，会静默构建错误 commit。必须先 `git rev-parse --verify --quiet "refs/tags/<tag>^{commit}"` 解析到 SHA 再 checkout SHA（参考 `update.sh` 的 `_update_source`）
 
 ## 安全特性
 
-- **文件锁**：`flock` + 动态 FD（`exec {fd}>>`），`build.sh` 和 `update.sh` 互斥；`update.sh` 在调用 `build.sh` 前释放锁以避免死锁
-- **构建失败清理**：`build.sh` 通过双重 trap（SIGINT/SIGTERM + EXIT）删除未完成构建目录
-- **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时输出详细恢复步骤
+- **文件锁**：`flock` + 动态 FD（`exec {fd}>>`），`build.sh` 和 `update.sh` 互斥，均在参数解析**之后**获取（`--help`/`--version` 不受锁占用影响）；`update.sh` 在调用 `build.sh` 前释放锁以避免死锁，构建失败进入回滚前重新取锁（回滚修改源码树，防止与并发进程交错）
+- **构建失败清理**：`build.sh` 通过双重 trap（SIGINT/SIGTERM 显式退出码 + EXIT）删除未完成构建目录
+- **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义
 - **磁盘空间检查**：构建前验证 ≥10GB 可用（`llama_check_disk_space`）
-- **子模块清理**：`update.sh` 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目
+- **子模块清理**：`update.sh` 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目（`ls-files --stage` 按 TAB 解析，兼容含空格路径）
 
 ## 注意事项
 

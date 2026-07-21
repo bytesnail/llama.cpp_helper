@@ -1,13 +1,13 @@
 .DEFAULT_GOAL := help
 
-# Check for user-local tool paths; fall back to bare names if not found
-SHELLCHECK  := $(shell command -v shellcheck 2>/dev/null || echo shellcheck)  # fallback unused when _check_shellcheck guards lint target
+# 检测用户本地工具路径；未找到时回退到裸命令名（由 _check_* 目标给出安装提示）
+SHELLCHECK  := $(shell command -v shellcheck 2>/dev/null || echo shellcheck)
 BATS        := $(shell command -v bats 2>/dev/null || echo bats)
 
 SHELL_SCRIPTS := common.sh config.sh build.sh update.sh run_env.sh tests/test_helper.bash
 TEST_COUNT   := $(shell grep -c '@test' tests/*.bats 2>/dev/null | awk -F: '{s+=$$NF} END{print s+0}')
 
-# Verify tool availability before running targets that require them
+# 运行依赖工具的目标前先验证工具可用性
 _check_shellcheck: SHELLCHECK_OK := $(shell command -v shellcheck 2>/dev/null)
 _check_shellcheck:
 	@[ -n "$(SHELLCHECK_OK)" ] || { echo "Error: shellcheck not found. Install: apt install shellcheck"; exit 1; }

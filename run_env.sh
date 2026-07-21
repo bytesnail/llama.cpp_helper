@@ -55,6 +55,11 @@ declare -A _LLAMA_RUN_ENV_VARS=(
     ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
 )
 
+# Usage: _env_var_value <name> / _env_var_desc <name>
+# "值|描述" 格式的统一解析点（_show_env_vars 与 main 设置循环共用）
+_env_var_value() { printf '%s' "${_LLAMA_RUN_ENV_VARS[$1]%|*}"; }
+_env_var_desc()  { printf '%s' "${_LLAMA_RUN_ENV_VARS[$1]#*|}"; }
+
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
 _show_help() {
@@ -77,8 +82,8 @@ _show_env_vars() {
     echo "环境变量:"
     # 使用 sort 确保输出顺序确定性
     while IFS= read -r var; do
-        local info="${_LLAMA_RUN_ENV_VARS[$var]}"
-        local desc="${info#*|}"
+        local desc
+        desc=$(_env_var_desc "$var")
         echo "  ${var}"
         echo "    作用: ${desc}"
         if [[ -n "${!var:-}" ]]; then
@@ -156,11 +161,10 @@ main() {
     fi
 
     # 逐个设置环境变量
-    local var info value desc
+    local var value desc
     while IFS= read -r var; do
-        info="${_LLAMA_RUN_ENV_VARS[$var]}"
-        value="${info%|*}"
-        desc="${info#*|}"
+        value=$(_env_var_value "$var")
+        desc=$(_env_var_desc "$var")
 
         # 检查是否已设置（允许用户预先覆盖）
         if [[ -n "${!var:-}" ]]; then
@@ -184,8 +188,11 @@ EOF
     llama_ok "llama.cpp 运行环境已加载"
 }
 
-main "$@"
-_main_rc=$?
+# || 捕获：本脚本被 source 时在父 shell 中执行；父 shell 启用 set -e 时，
+# main 返回非零（未知选项等错误路径）作为简单命令会杀死父 shell——
+# 与"source 使用不伤害父 shell"的设计承诺相悖（已实证）
+_main_rc=0
+main "$@" || _main_rc=$?
 
 llama_restore_colors
 

@@ -22,19 +22,14 @@ source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"
 
-# --- 文件锁定 ------------------------------------------------
-# 为测试提取而 source 时跳过设置代码
-if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
-    BUILD_DIR="${LLAMA_CPP_SRC}/build"
-    readonly BUILD_DIR
-
-    llama_acquire_lock || llama_die "无法获取文件锁"
-fi
-
 # --- 退出清理 ------------------------------------------------
-# Usage: _cleanup_on_exit
+# BUILD_DIR 由 config.sh 统一定义（写方 build.sh 与读方 common.sh/update.sh 的
+# 共享协议）；文件锁在 main() 参数解析之后才获取，--help/--version 不受锁占用影响。
+# Usage: _cleanup_on_exit [exit_code]
 _cleanup_on_exit() {
-    local exit_code=$?
+    # 信号路径由 trap 显式传入退出码（130/143）：信号在 builtin 间隙到达时
+    # $? 可能为 0，会导致不清理并以 0 退出（update.sh 据此误判构建成功）
+    local exit_code="${1:-$?}"
     [[ "${_CLEANUP_DONE:-0}" -eq 1 ]] && return 0
     _CLEANUP_DONE=1
     # 仅当本次运行确实进入重建流程（_BUILD_TOUCHED）后才清理构建目录；
@@ -46,13 +41,14 @@ _cleanup_on_exit() {
     llama_safe_exit "$exit_code"
 }
 if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
-    llama_setup_trap _cleanup_on_exit
+    trap '_cleanup_on_exit 130' SIGINT   # 130 = 128 + SIGINT(2)
+    trap '_cleanup_on_exit 143' SIGTERM  # 143 = 128 + SIGTERM(15)
     trap '_cleanup_on_exit' EXIT
 fi
 
-# 双重 trap 设计说明：
-# - llama_setup_trap 注册 SIGINT/SIGTERM → _cleanup_on_exit（用户中断清理）
-# - trap EXIT → _cleanup_on_exit（确保 llama_die→exit 路径也执行清理）
+# trap 设计说明：
+# - 信号 trap 显式传入退出码 → _cleanup_on_exit（用户中断时强制非零退出 + 清理）
+# - trap EXIT 无参 → _cleanup_on_exit 使用 $?（llama_die→exit 路径也执行清理）
 # _CLEANUP_DONE 守卫防止信号与 EXIT 同时触发时的重复执行。
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
@@ -118,7 +114,7 @@ _verify_binary_exists() {
         return 1
     fi
 }
-# Usage: _verify_linking <bin_dir> [binary] [grep_pattern] [label] [not_found_msg]
+# Usage: _verify_linking <bin_dir> [binary] [grep_pattern] [label] [not_found_msg] [ldd_output]
 _verify_linking() {
     local bin_dir="$1"
     if [[ -z "$bin_dir" ]]; then
@@ -129,6 +125,8 @@ _verify_linking() {
     local pattern="$3"
     local label="$4"
     local not_found_msg="$5"
+    # 可选第 6 参：调用方缓存的 ldd 输出（避免对同一二进制重复 ldd）
+    local ldd_output="${6:-}"
 
     llama_info "${label} 链接检查:"
     local bin_path="${bin_dir}/${binary}"
@@ -137,37 +135,49 @@ _verify_linking() {
         llama_warn "${binary} 不存在，跳过 ${label} 链接检查"
         return 0
     fi
-    local ldd_output
-    ldd_output=$(ldd "$bin_path" 2>/dev/null) || true
-    if grep -qiE "$pattern" <<< "$ldd_output"; then
+    if [[ -z "$ldd_output" ]]; then
+        ldd_output=$(ldd "$bin_path" 2>/dev/null) || true
+    fi
+    # 单次 grep 捕获匹配行（原实现先 grep -q 判断、再用相同模式 grep 第二遍
+    # 打印，同一正则扫描两遍且判断与输出可能漂移）
+    local matches
+    matches=$(grep -iE "$pattern" <<< "$ldd_output" || true)
+    if [[ -n "$matches" ]]; then
         while IFS= read -r line; do
             llama_detail "$line"
-        done < <(grep -iE "$pattern" <<< "$ldd_output")
+        done <<< "$matches"
         llama_ok "${label} 链接正常"
     else
         llama_warn "${not_found_msg}"
     fi
 }
 
-# Usage: _verify_cuda_linking <bin_dir> [binary]
+# Usage: _verify_cuda_linking <bin_dir> [binary] [ldd_output]
 _verify_cuda_linking() {
-    _verify_linking "${1:-}" "${2:-llama-cli}" "libcudart|libcublas|libcuda" "CUDA" "未找到 CUDA 动态库链接（可能是静态链接）"
+    _verify_linking "${1:-}" "${2:-llama-cli}" "libcudart|libcublas|libcuda" "CUDA" "未找到 CUDA 动态库链接（可能是静态链接）" "${3:-}"
 }
 
-# Usage: _verify_openblas_linking <bin_dir> [binary]
+# Usage: _verify_openblas_linking <bin_dir> [binary] [ldd_output]
 _verify_openblas_linking() {
-    _verify_linking "${1:-}" "${2:-llama-cli}" "libopenblas|libblas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）"
+    _verify_linking "${1:-}" "${2:-llama-cli}" "libopenblas|libblas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）" "${3:-}"
 }
 
-# Usage: _verify_openblas_runtime <bin_dir> [binary]
+# Usage: _verify_openblas_runtime <bin_dir> [binary] [ldd_output]
 _verify_openblas_runtime() {
     local bin_dir="$1"
     local binary="${2:-llama-cli}"
+    local ldd_output="${3:-}"
     local bin_path="${bin_dir}/${binary}"
 
     llama_info "OpenBLAS 运行时验证："
+    if [[ -z "$ldd_output" ]]; then
+        ldd_output=$(ldd "$bin_path" 2>/dev/null || true)
+    fi
     local openblas_lib
-    openblas_lib=$(ldd "$bin_path" 2>/dev/null | grep -oE '/[^ ]+libopenblas[^ ]*' | head -1)
+    # || true：grep 无匹配（如 GGML_BLAS=OFF 构建）管线在 pipefail 下返回
+    # 非零，会在到达降级分支前中止脚本（反模式 8：函数设计了优雅降级，
+    # 管线赋值必须防护，不能依赖调用点的 || true）
+    openblas_lib=$(grep -oE '/[^ ]+libopenblas[^ ]*' <<< "$ldd_output" | head -1 || true)
     if [[ -n "$openblas_lib" ]]; then
         if _LLAMA_OPENBLAS_LIB="$openblas_lib" python3 -c 'import ctypes, os; ctypes.CDLL(os.environ["_LLAMA_OPENBLAS_LIB"])' 2>/dev/null; then
             llama_ok "OpenBLAS 可正常加载"
@@ -182,8 +192,17 @@ _verify_openblas_runtime() {
 # Usage: _verify_build
 _verify_build() {
     local errors=0
-    local bin_dir="${BUILD_DIR}/bin"
+    # BUILD_BIN_DIR 由 config.sh 统一定义（_LLAMA_SOURCE_ONLY 提取模式同样
+    # 经 build.sh 顶部 source config.sh 获得，不再依赖被跳过的顶层赋值）
+    local bin_dir="${BUILD_BIN_DIR:-${BUILD_DIR}/bin}"
     local verify_binary="${REQUIRED_BINARIES[0]}"
+
+    # 对同一二进制只执行一次 ldd，缓存供全部链接/运行时检查复用
+    # （ldd 需解析全部动态依赖，对 llama-cli 每次约 10-50ms）
+    local ldd_cache=""
+    if [[ -x "${bin_dir}/${verify_binary}" ]]; then
+        ldd_cache=$(ldd "${bin_dir}/${verify_binary}" 2>/dev/null || true)
+    fi
 
     # 检查关键二进制文件
     for binary in "${REQUIRED_BINARIES[@]}"; do
@@ -191,8 +210,8 @@ _verify_build() {
     done
 
     # 链接检查（非致命）
-    _verify_cuda_linking "$bin_dir" "$verify_binary"
-    _verify_openblas_linking "$bin_dir" "$verify_binary"
+    _verify_cuda_linking "$bin_dir" "$verify_binary" "$ldd_cache"
+    _verify_openblas_linking "$bin_dir" "$verify_binary" "$ldd_cache"
 
     # 验证二进制文件可执行性
     llama_info "验证二进制文件可执行性："
@@ -207,7 +226,7 @@ _verify_build() {
     fi
 
     # 运行时验证（非致命）
-    _verify_openblas_runtime "$bin_dir" "$verify_binary" || true
+    _verify_openblas_runtime "$bin_dir" "$verify_binary" "$ldd_cache" || true
     return "$errors"
 }
 
@@ -237,6 +256,9 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         esac
     done
 
+    # --- 文件锁（在参数解析之后获取，--help/--version 不受锁占用影响） -------
+    llama_acquire_lock || llama_die "无法获取文件锁"
+
     # --- 前置检查 ------------------------------------------------
     # 激活 conda 环境（如果 CUDA 工具链通过 conda 安装）
     llama_activate_conda
@@ -249,6 +271,7 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         gcc "gcc" \
         g++ "g++" \
         python3 "python3" \
+        flock "util-linux" \
         && llama_ok "构建工具检查通过" || llama_die "构建工具检查失败"
 
     # ninja 在 Debian/Ubuntu 上可能以 ninja-build 名称安装
@@ -321,22 +344,24 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         cmake_extra_args=()
     fi
 
+    # llama_run_silent 如实返回退出码；set -e 下必须用 || 捕获，
+    # 否则非零返回会立即中止脚本，下面的错误处理成为死代码
+    local cmake_exit=0
     llama_run_silent cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_C_COMPILER="$gcc_path" \
         -DCMAKE_CXX_COMPILER="$gxx_path" \
         -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
-        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_TESTS="${LLAMA_BUILD_TESTS}" \
         -DGGML_NATIVE="${GGML_NATIVE}" \
         -DGGML_BLAS="${GGML_BLAS}" \
         -DGGML_BLAS_VENDOR="${GGML_BLAS_VENDOR}" \
-        -DGGML_CUDA=ON \
+        -DGGML_CUDA="${GGML_CUDA}" \
         -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}" \
         -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
         -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
         -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
         -DGGML_CUDA_GRAPHS="${GGML_CUDA_GRAPHS}" \
-        ${cmake_extra_args[@]+"${cmake_extra_args[@]}"}
-    local cmake_exit=$?
+        ${cmake_extra_args[@]+"${cmake_extra_args[@]}"} || cmake_exit=$?
 
     if [[ "$cmake_exit" -ne 0 ]]; then
         llama_die "CMake 配置失败 (退出码: $cmake_exit)"
@@ -347,8 +372,8 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     # --- 步骤 3：编译 --------------------------------------------
     llama_step "步骤 3/4：编译（${jobs} 核并行）"
 
-    llama_run_silent cmake --build "$BUILD_DIR" -j "$jobs"
-    local build_exit=$?
+    local build_exit=0
+    llama_run_silent cmake --build "$BUILD_DIR" -j "$jobs" || build_exit=$?
 
     if [[ "$build_exit" -ne 0 ]]; then
         llama_die "编译失败 (退出码: $build_exit)"
@@ -359,12 +384,20 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     # --- 步骤 4：验证构建 ----------------------------------------
     llama_step "步骤 4/4：验证构建"
 
-    _verify_build
-    local verify_exit=$?
+    # _verify_build 以返回码报告错误数；|| 捕获防止 set -e 提前中止
+    local verify_exit=0
+    _verify_build || verify_exit=$?
     if [[ "$verify_exit" -gt 0 ]]; then
         llama_die "构建验证失败，${verify_exit} 个错误"
     fi
-    git -C "$LLAMA_CPP_SRC" rev-parse HEAD > "${BUILD_DIR}/.build-stamp" 2>/dev/null || llama_warn "无法写入构建标记"
+    # 先取 HEAD 成功后再写 stamp：重定向先于 git 执行，
+    # git 失败时直接写会留下空 stamp（llama_check_build_health 曾因此误判健康）
+    local head_sha
+    if head_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null); then
+        printf '%s\n' "$head_sha" > "$BUILD_STAMP" || llama_warn "无法写入构建标记"
+    else
+        llama_warn "无法读取源码 commit，跳过构建标记"
+    fi
     echo
     llama_ok "构建完成！"
     echo

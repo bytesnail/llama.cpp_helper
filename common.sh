@@ -21,6 +21,36 @@ fi
 # 颜色变量名清单（单一来源）：驱动 llama_save_colors / llama_restore_colors，
 # 消除此前 common.sh 与 run_env.sh 各维护一份副本的重复。
 readonly _LLAMA_COLOR_VARS=(RED GREEN YELLOW CYAN BLUE BOLD NC)
+
+# Usage: llama_save_colors
+# 保存当前颜色变量值（_LLAMA_COLOR_VARS 列表），供 llama_restore_colors 恢复。
+llama_save_colors() {
+    local cvar
+    for cvar in "${_LLAMA_COLOR_VARS[@]}"; do
+        printf -v "_LLAMA_SAVED_${cvar}" '%s' "${!cvar-}"
+    done
+}
+
+# Usage: llama_restore_colors
+# 恢复 llama_save_colors 保存的颜色变量。清理临时变量。
+llama_restore_colors() {
+    local cvar saved_var
+    for cvar in "${_LLAMA_COLOR_VARS[@]}"; do
+        saved_var="_LLAMA_SAVED_${cvar}"
+        if [[ -n "${!saved_var+isset}" ]]; then
+            printf -v "$cvar" '%s' "${!saved_var}"
+        else
+            unset "$cvar" 2>/dev/null || true
+        fi
+        unset "$saved_var"
+    done
+}
+
+# source 时自动保存调用者已有的同名变量（防重复 source 守卫保证只执行一次），
+# 使 run_env.sh 退出时的 llama_restore_colors 能真正恢复父 shell 原值，
+# 而不是无条件 unset 销毁用户预设（unset 与空串不做区分，恢复为空串）。
+llama_save_colors
+
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
     GREEN='\033[0;32m'
@@ -52,12 +82,14 @@ fi
 # 向 stdout 输出绿色 [OK] 前缀的成功消息。
 # Usage: llama_info <message>
 # 向 stdout 输出青色 [INFO] 前缀的信息消息。
-llama_info()  { printf '%b\n' "${CYAN}[INFO]${NC} $*"; }
-llama_ok()    { printf '%b\n' "${GREEN}[OK]${NC} $*"; }
-llama_warn()  { printf '%b\n' "${YELLOW}[WARN]${NC} $*"; }
-llama_err()   { printf '%b\n' "${RED}[ERROR]${NC} $*" >&2; }
-llama_step()  { printf '%b\n' "\n${BOLD}=== $* ===${NC}"; }
-llama_detail() { printf '%b\n' "${BLUE}  →${NC} $*"; }
+# 前缀用 %b 展开颜色转义，消息体用 %s 字面输出——防止外部文本（编译器/conda
+# 报错等）中的反斜杠序列被 %b 改写，或向终端注入 ANSI 控制序列。
+llama_info()  { printf '%b%s\n' "${CYAN}[INFO]${NC} " "$*"; }
+llama_ok()    { printf '%b%s\n' "${GREEN}[OK]${NC} " "$*"; }
+llama_warn()  { printf '%b%s\n' "${YELLOW}[WARN]${NC} " "$*"; }
+llama_err()   { printf '%b%s\n' "${RED}[ERROR]${NC} " "$*" >&2; }
+llama_step()  { printf '%b=== %s ===%b\n' "\n${BOLD}" "$*" "${NC}"; }
+llama_detail() { printf '%b%s\n' "${BLUE}  →${NC} " "$*"; }
 
 # --- 前置条件检查 --------------------------------------------
 # Usage: llama_check_commands <cmd1> [pkg1] <cmd2> [pkg2] ...
@@ -156,13 +188,18 @@ _llama_join() {
 # Usage: _llama_lscpu_field <field_regex>
 # 解析 lscpu 输出中首个匹配字段（$1 为作用于首列的正则）的值，去前导空格。
 # lscpu 不可用时输出空串。
+# 同进程内缓存 lscpu 输出（硬件汇总会查询多个字段），避免每次 fork lscpu；
+# LC_ALL=C 固定英文输出，防止本地化字段名（如中文 "型号:"）导致匹配失败。
 _llama_lscpu_field() {
-    # || true：lscpu 不可用时（缺失/损坏）管线在 pipefail 下返回非零，
+    # || true：lscpu 不可用时（缺失/损坏）赋值在 pipefail 下返回非零，
     # 会中止 build.sh（经 llama_hw_cpu_* → llama_print_hardware_summary 调用链）。
-    # 加 || true 后，调用者会得到空串，从而触发 /proc/cpuinfo 回退或 0 回退。
-    lscpu 2>/dev/null | awk -F: -v re="$1" '
+    # 加 || true 后缓存为空串，调用者得到空串，从而触发 /proc/cpuinfo 回退或 0 回退。
+    if [[ -z "${_LLAMA_LSCPU_CACHE+x}" ]]; then
+        _LLAMA_LSCPU_CACHE=$(LC_ALL=C lscpu 2>/dev/null || true)
+    fi
+    awk -F: -v re="$1" '
         $1 ~ re { sub(/^[[:space:]]+/, "", $2); print $2; exit }
-    ' || true
+    ' <<< "$_LLAMA_LSCPU_CACHE"
 }
 
 # Usage: llama_hw_cpu_model
@@ -241,7 +278,9 @@ llama_hw_cpu_flags() {
         result+=("AVX-512($(_llama_join ',' "${avx512[@]}"))")
     fi
 
-    _llama_join ', ' "${result[@]}"
+    # ${result[@]+...}：空数组在 Bash ≤4.3 + set -u 下展开 "${result[@]}"
+    # 会报 unbound variable（4.4 才修复），与 build.sh 的 cmake_extra_args 同款防护。
+    _llama_join ', ' ${result[@]+"${result[@]}"}
 }
 
 # Usage: llama_hw_mem_total_bytes
@@ -294,25 +333,31 @@ llama_print_hardware_summary() {
     llama_detail "内存:   $(llama_hw_mem_total_human)"
 
     # --- GPU + NVLink 互联 ---
-    local gpu_count
-    # || true：llama_get_gpu_count 在无 nvidia-smi 时返回 1；本函数设计为优雅降级
-    # （显示 "未检测到 NVIDIA GPU"），不应在 set -e 下中止整个构建。
-    gpu_count=$(llama_get_gpu_count || true)
-    if ((gpu_count > 0)) && command -v nvidia-smi &>/dev/null; then
+    # 单次 nvidia-smi 查询同时得到数量与详情：nvidia-smi 每次启动需 50-150ms
+    # （驱动初始化），先计数再查详情的两段式会重复付出该开销。
+    local gpu_lines=()
+    if command -v nvidia-smi &>/dev/null; then
+        mapfile -t gpu_lines < <(nvidia-smi --query-gpu=index,name,compute_cap,memory.total \
+                                 --format=csv,noheader,nounits 2>/dev/null | sed 's/, /|/g')
+    fi
+    local gpu_count=${#gpu_lines[@]}
+    if ((gpu_count > 0)); then
         llama_detail "GPU（${gpu_count} 块）:"
-        local idx name cc vram vram_human
-        while IFS='|' read -r idx name cc vram; do
+        local idx name cc vram vram_human gpu_line
+        for gpu_line in "${gpu_lines[@]}"; do
+            IFS='|' read -r idx name cc vram <<< "$gpu_line"
             vram_human="?"
             [[ "$vram" =~ ^[0-9]+$ ]] && vram_human=$(llama_human_size $((vram * 1024 * 1024)))
             llama_detail "  [${idx}] ${name}（sm_${cc}, ${vram_human}）"
-        done < <(nvidia-smi --query-gpu=index,name,compute_cap,memory.total \
-                           --format=csv,noheader,nounits 2>/dev/null | sed 's/, /|/g')
+        done
 
         # NVLink 拓扑：topo -m 矩阵中 GPU 间互联类型，NV# 表示 # 条 NVLink 绑定
         local max_nv
         # || true：PCIe-only 多 GPU 系统中 grep 找不到 NV* 条目返回 1，
         # pipefail+set -e 下会中止 build.sh（本函数由 build.sh:268 在 set -euo pipefail 下调用）。
-        max_nv=$(nvidia-smi topo -m 2>/dev/null | grep -oE 'NV[0-9]+' | sort -u | tail -1 || true)
+        # sort -uV（版本排序）：混合拓扑中 NV12 字典序小于 NV2，
+        # 字典序 sort -u | tail -1 会错取 NV2；按数值排序取最大绑定数。
+        max_nv=$(nvidia-smi topo -m 2>/dev/null | grep -oE 'NV[0-9]+' | sort -uV | tail -1 || true)
         if [[ -n "$max_nv" ]]; then
             local links link_bw
             links=${max_nv#NV}
@@ -390,8 +435,13 @@ llama_activate_conda() {
     # conda 激活脚本可能引用未设置变量，或在 set -euo pipefail
     # 下导致脚本退出（例如 conda 的 ~cuda-nvcc_activate.sh
     # 未做防护就直接引用 NVCC_PREPEND_FLAGS）。
-    local prev_opts
-    prev_opts=$(set +o)
+    # 注意：不能用 prev_opts=$(set +o) 保存 errexit——bash 默认在命令替换
+    # 子 shell 中重置 errexit（shopt inherit_errexit 默认 off），捕获到的
+    # 恒为 "set +o errexit"，eval 恢复后会把调用者的 set -e 永久静默关闭。
+    # $- 在当前 shell 读取，不受该重置影响（|| / if 等豁免上下文中仍正确）。
+    local restore_e=0 restore_u=0
+    if [[ $- == *e* ]]; then restore_e=1; fi
+    if [[ $- == *u* ]]; then restore_u=1; fi
     set +eu
 
     # shellcheck source=/dev/null
@@ -418,14 +468,47 @@ llama_activate_conda() {
         fi
     fi
 
-    # 恢复之前的 shell 选项
-    eval "$prev_opts" 2>/dev/null || true
+    # 恢复之前的 shell 选项（仅恢复本函数改动的 e/u）
+    if ((restore_u)); then set -u; fi
+    if ((restore_e)); then set -e; fi
 
     return 0
 }
 
 # --- 文件锁 --------------------------------------------------
 # 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
+
+# Usage: _lock_grab <lock_file>
+# 打开锁文件、非阻塞 flock、写入持有者 PID。
+# 返回：0=成功（设置 LOCK_FD），1=锁被占用，2=锁文件无法打开/写入（已输出错误）。
+# 内部辅助 — 供 llama_acquire_lock 与 _recover_stale_lock 复用，消除两份
+# 「exec {fd}>> → flock -n → 截断 → 写 PID → LOCK_FD=$fd」重复拷贝。
+_lock_grab() {
+    local lock_file="$1"
+    local fd
+    # if ! 守护：exec 重定向失败时只打印错误并返回，不杀死 shell
+    if ! exec {fd}>>"$lock_file"; then
+        llama_err "无法打开锁文件: ${lock_file}"
+        return 2
+    fi
+    if ! flock -n "$fd"; then
+        # bash 关闭已关闭/无效的 fd 静默返回 0——这里不能加 2>/dev/null：
+        # 无命令 exec 的重定向会永久改变当前 shell 的 stderr，
+        # 实测会吞掉调用点之后的全部 llama_err 输出
+        exec {fd}>&-
+        return 1
+    fi
+    # 单步 open+write 写入 PID：原「: > 截断 + echo $$ 追加」两步之间存在
+    # 竞争者读到空文件的窗口。$BASHPID 在子 shell 中也是实际持锁进程的
+    # PID（$$ 会写成顶层 shell 的 PID，活锁被误诊为残留锁）
+    if ! printf '%s\n' "$BASHPID" > "$lock_file"; then
+        llama_err "无法写入锁文件: ${lock_file}"
+        exec {fd}>&-
+        return 2
+    fi
+    LOCK_FD=$fd
+    return 0
+}
 
 # Usage: _recover_stale_lock <lock_file>
 # 尝试恢复残留锁。成功返回 0（设置 LOCK_FD），失败返回 1。
@@ -437,26 +520,24 @@ _recover_stale_lock() {
 
     llama_warn "检测到残留锁（原持有者 PID ${holder_pid:-未知} 已不存在）"
     llama_detail "尝试自动清理残留锁..."
-    local fd
-    exec {fd}>>"$lock_file"
-
-    if ! flock -n "$fd"; then
+    local grab_rc=0
+    _lock_grab "$lock_file" || grab_rc=$?
+    if [[ "$grab_rc" -eq 2 ]]; then
+        return 1  # 打开/写入失败，_lock_grab 已输出明确错误
+    fi
+    if [[ "$grab_rc" -ne 0 ]]; then
         llama_err "自动清理失败，锁仍然被占用"
         llama_detail "请手动检查是否有其他进程在使用该锁文件"
         llama_detail "请在确认没有其他进程占用锁文件后重试"
-        exec {fd}>&- 2>/dev/null || true
         return 1
     fi
 
     llama_ok "残留锁已自动清理，继续执行"
-    : > "$lock_file"
-    echo $$ >&"$fd"
-    LOCK_FD=$fd
     return 0
 }
 
 # Usage: llama_acquire_lock [lock_file]
-# 返回：成功返回 0（设置 LOCK_FD），锁被占用返回 1。
+# 返回：成功返回 0（设置 LOCK_FD），锁被占用或不可用返回 1。
 llama_acquire_lock() {
     local lock_file="${1:-$LOCK_FILE}"  # 默认使用脚本级 LOCK_FILE
     if [[ -z "$lock_file" ]]; then
@@ -464,43 +545,55 @@ llama_acquire_lock() {
         return 1
     fi
 
+    # flock 缺失时 flock -n 返回 127，会被误判为"锁被占用"——提前明确诊断
+    if ! command -v flock &>/dev/null; then
+        llama_err "缺少 flock 命令（通常由 util-linux 包提供），无法进行文件锁检查"
+        return 1
+    fi
+
     # 确保锁文件目录存在
     local lock_dir
     lock_dir=$(dirname "$lock_file")
     if [[ ! -d "$lock_dir" ]]; then
-        mkdir -p "$lock_dir" 2>/dev/null || true
+        if ! mkdir -p "$lock_dir" 2>/dev/null; then
+            llama_err "无法创建锁目录: ${lock_dir}"
+            return 1
+        fi
     fi
 
-    local fd
-    exec {fd}>>"$lock_file"
+    local grab_rc=0
+    _lock_grab "$lock_file" || grab_rc=$?
+    case "$grab_rc" in
+        0) return 0 ;;
+        2) return 1 ;;  # 打开/写入失败，_lock_grab 已输出明确错误
+    esac
 
-    if ! flock -n "$fd"; then
-        # 锁被占用 — 仅在 flock 失败后从文件读取 PID 用于诊断
-        local holder_pid
+    # 锁被占用 — 从文件读取 PID 用于诊断
+    local holder_pid
+    holder_pid=$(cat "$lock_file" 2>/dev/null || true)
+    if [[ -z "$holder_pid" ]]; then
+        # 持有者在获得 flock 后、写入 PID 前存在极窄窗口；
+        # 短暂重读一次，避免把正常锁竞争误诊为残留锁
+        sleep 0.1
         holder_pid=$(cat "$lock_file" 2>/dev/null || true)
-        local holder_cmd
-        if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
-            holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
-            llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
-        else
-            exec {fd}>&- 2>/dev/null || true
-            _recover_stale_lock "$lock_file"
-            return
-        fi
-        exec {fd}>&- 2>/dev/null || true
+    fi
+    local holder_cmd
+    if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
+        holder_cmd=$(ps -p "$holder_pid" -o comm= 2>/dev/null || echo "未知")
+        llama_err "另一个进程正在运行 (PID: ${holder_pid}, 命令: ${holder_cmd})，请等待其完成"
         return 1
     fi
-    : > "$lock_file"
-    echo $$ >&"$fd"
-    LOCK_FD=$fd
-    return 0
+    _recover_stale_lock "$lock_file"
 }
 
 # Usage: llama_release_lock
 # 关闭锁文件描述符
 llama_release_lock() {
     if [[ -n "${LOCK_FD:-}" ]]; then
-        exec {LOCK_FD}>&- 2>/dev/null || true
+        # bash 关闭已关闭的 fd 静默返回 0，无需错误屏蔽；
+        # 绝不能加 2>/dev/null——无命令 exec 的重定向会永久改变当前
+        # shell 的 stderr（实测吞掉 llama_safe_exit 之前的全部错误输出）
+        exec {LOCK_FD}>&-
         unset LOCK_FD
     fi
     # 锁文件不可删除 — flock 基于 inode 而非文件名操作。
@@ -588,7 +681,8 @@ llama_check_build_health() {
     if [[ -z "${LLAMA_CPP_SRC:-}" ]]; then
         return 1
     fi
-    local bin_dir="${LLAMA_CPP_SRC}/build/bin"
+    # 构建布局常量由 config.sh 统一定义；未 source config.sh 时按默认布局回退
+    local bin_dir="${BUILD_BIN_DIR:-${LLAMA_CPP_SRC}/build/bin}"
     if [[ ! -d "$bin_dir" ]]; then
         return 1
     fi
@@ -599,9 +693,12 @@ llama_check_build_health() {
         fi
     done
     # 检查构建标记文件是否存在且与当前源码 commit 匹配
-    local build_stamp="${LLAMA_CPP_SRC}/build/.build-stamp"
+    local build_stamp="${BUILD_STAMP:-${LLAMA_CPP_SRC}/build/.build-stamp}"
     local current_head
     current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
+    # git 不可用（缺失/dubious ownership/.git 损坏）时无法判定：
+    # 空串与 git 失败时留下的空 stamp 文件相等会造成"健康"误判，必须按不健康处理
+    [[ -z "$current_head" ]] && return 1
     if [[ -f "$build_stamp" ]]; then
         local stamped_head
         stamped_head=$(cat "$build_stamp" 2>/dev/null || echo "")
@@ -687,22 +784,26 @@ llama_safe_exit() {
 # Usage: llama_return_or_exit <exit_code>
 llama_return_or_exit() {
     local code="$1"
-    # source 上下文中：return 成功。脚本上下文中：return 失败，回退到 exit。
-    { return "$code"; } 2>/dev/null || exit "$code"
+    # BASH_SOURCE[1] 是调用者所在文件：与 $0 相同 → 脚本上下文（exit）；
+    # 不同（调用者正被 source）→ source 上下文（return）。
+    # 原实现靠"函数体内 return 失败回退 exit"检测上下文——但函数体内
+    # return 永远合法，该回退是死代码，脚本退出码实际依赖"它是文件最后
+    # 一条命令"这一巧合（末尾追加任何语句都会把失败退出码覆盖为 0）。
+    if [[ "${BASH_SOURCE[1]}" == "$0" ]]; then
+        exit "$code"
+    fi
+    return "$code"
 }
 
 # --- 初始化/引用/帮助辅助 ------------------------------------
 # Usage: llama_init_script_dir
-# 将 SCRIPT_DIR 初始化为调用脚本所在目录。
-# 设置并导出 SCRIPT_DIR 为解析后的绝对路径。
+# 将 SCRIPT_DIR 设置为调用脚本所在目录（解析后的绝对路径）。
 llama_init_script_dir() {
-    # SCRIPT_DIR 已设置时不做任何操作（例如由 build.sh/update.sh 直接设置）
-    if [[ -v SCRIPT_DIR ]] && [[ -n "${SCRIPT_DIR:-}" ]]; then
-        return 0
-    fi
+    # 无条件按调用者位置重算：信任外部预设的通用名变量会错信用户环境中
+    # 已有的同名 SCRIPT_DIR（dotfiles 常用名）。不 export——source 场景
+    # （run_env.sh）下赋值在当前 shell 天然可见，export 会泄漏进父 shell。
     local caller="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
     SCRIPT_DIR="$(cd "$(dirname "$caller")" >/dev/null && pwd)"
-    export SCRIPT_DIR
 }
 
 # 帮助文本标签遵循文件顶部定义的语言策略。
@@ -738,29 +839,9 @@ llama_show_version() {
     echo "llama.cpp_helper ${LLAMA_HELPER_VERSION:-unknown}"
 }
 
-# Usage: llama_save_colors
-# 保存当前颜色变量值（_LLAMA_COLOR_VARS 列表），供 llama_restore_colors 恢复。
-llama_save_colors() {
-    local cvar
-    for cvar in "${_LLAMA_COLOR_VARS[@]}"; do
-        printf -v "_LLAMA_SAVED_${cvar}" '%s' "${!cvar-}"
-    done
-}
+# 注：llama_save_colors / llama_restore_colors 已移至文件顶部颜色区定义
+# （颜色赋值之前），以便 source 时自动保存调用者原值。
 
-# Usage: llama_restore_colors
-# 恢复 llama_save_colors 保存的颜色变量。清理临时变量。
-llama_restore_colors() {
-    local cvar saved_var
-    for cvar in "${_LLAMA_COLOR_VARS[@]}"; do
-        saved_var="_LLAMA_SAVED_${cvar}"
-        if [[ -n "${!saved_var+isset}" ]]; then
-            printf -v "$cvar" '%s' "${!saved_var}"
-        else
-            unset "$cvar" 2>/dev/null || true
-        fi
-        unset "$saved_var"
-    done
-}
 # Usage: llama_print_run_examples <bin_dir>
 llama_print_run_examples() {
     local bin_dir="${1:?bin_dir required}"
@@ -773,12 +854,18 @@ llama_print_run_examples() {
 
 # Usage: llama_run_silent <command> [args...]
 # 在禁用 set -e 的情况下运行命令并捕获输出。失败时将输出发送到 stderr。
+# 注意：本函数如实返回被包装命令的退出码——set -e 的调用者必须用
+# `llama_run_silent cmd || rc=$?`（或 if）捕获，否则非零返回会中止脚本。
 llama_run_silent() {
     local ret
-    local prev_opts
     local tmp_out
     tmp_out=$(mktemp "${TMPDIR:-/tmp}/llama_run_silent.XXXXXX" 2>/dev/null) || tmp_out=""
-    prev_opts=$(set +o)
+    # 与 llama_activate_conda 同理：不能用 prev_opts=$(set +o) 保存/恢复
+    # errexit——bash 默认在命令替换子 shell 中重置 errexit（inherit_errexit
+    # 默认 off），eval 恢复后会把调用者的 set -e 永久静默关闭（已实证）。
+    # $- 在当前 shell 读取，|| / if 等豁免上下文中仍反映真实选项状态。
+    local restore_e=0
+    if [[ $- == *e* ]]; then restore_e=1; fi
     set +e
     if [[ -n "$tmp_out" ]]; then
         "$@" >"$tmp_out" 2>&1
@@ -792,6 +879,6 @@ llama_run_silent() {
         "$@"
         ret=$?
     fi
-    eval "$prev_opts" 2>/dev/null || true
+    if ((restore_e)); then set -e; fi
     return "$ret"
 }

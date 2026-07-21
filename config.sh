@@ -18,44 +18,58 @@ if [[ "$_LLAMA_CONFIG_SOURCED" -eq 1 ]]; then
 fi
 _LLAMA_CONFIG_SOURCED=1
 
+# --- 路径 ----------------------------------------------------
 # 可通过环境变量覆盖；默认为与本项目相邻的 llama.cpp 目录
-_LLAMA_PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# _LLAMA_PROJECT_ROOT 同样允许预设（测试用 fake root 注入）
+_LLAMA_PROJECT_ROOT="${_LLAMA_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 readonly _LLAMA_PROJECT_ROOT
 LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-${_LLAMA_PROJECT_ROOT}/../llama.cpp}"
 
-# 仓库信息
+# 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议，单一定义）
+BUILD_DIR="${BUILD_DIR:-${LLAMA_CPP_SRC}/build}"
+BUILD_BIN_DIR="${BUILD_BIN_DIR:-${BUILD_DIR}/bin}"
+BUILD_STAMP="${BUILD_STAMP:-${BUILD_DIR}/.build-stamp}"
+
+# --- 仓库信息 ------------------------------------------------
 REPO="ggml-org/llama.cpp"
 readonly REPO
 REPO_URL="https://github.com/ggml-org/llama.cpp"
 readonly REPO_URL
 
-# 资源限制和路径
+# --- 资源限制和路径 ------------------------------------------
 MIN_FREE_DISK_GB=10
 readonly MIN_FREE_DISK_GB
 LOCK_FILE="${LOCK_FILE:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock}"
 readonly LOCK_FILE
 
-# 构建配置（可通过环境变量覆盖）
+# --- 构建配置（可通过环境变量覆盖） ---------------------------
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES:-75}"
 CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS:---threads=0}" # NVCC 并行编译线程数（0=自动检测所有核心）
+GGML_CUDA="${GGML_CUDA:-ON}"
 GGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE:-512}" # NVLink P2P 批量大小（512=双 RTX 2080 Ti 平衡值）
 GGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS:-ON}"
 GGML_CUDA_GRAPHS="${GGML_CUDA_GRAPHS:-OFF}" # CUDA graphs（编译期开关；固定 shape 推理受益，默认 OFF 保持上游行为）
 GGML_NATIVE="${GGML_NATIVE:-ON}"
 GGML_BLAS="${GGML_BLAS:-ON}"
 GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
+LLAMA_BUILD_TESTS="${LLAMA_BUILD_TESTS:-OFF}" # 是否构建 llama.cpp 自身测试（节省编译时间默认 OFF）
 
-# conda 配置
+# --- conda 配置 ----------------------------------------------
 CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境名称
 
-# 网络超时配置（可通过环境变量覆盖）
+# --- 网络超时配置（可通过环境变量覆盖） -----------------------
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # 秒；update.sh HTTP 连接超时
 CURL_MAX_TIME="${CURL_MAX_TIME:-30}"                 # 秒；update.sh HTTP 最大请求时间
-# 关键二进制文件（用于构建验证和健康检查）
+# git HTTP 低速保护：低于限速持续超时秒数即中止传输（防止网络半挂起时 update.sh 无限期持锁）
+GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"  # 字节/秒
+GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-15}"      # 秒
+
+# --- 关键二进制文件（用于构建验证和健康检查） -----------------
 # declare -ar 是 Bash 中声明只读数组的唯一方式（readonly 无法作用于数组）
 declare -ar REQUIRED_BINARIES=("llama-cli" "llama-server")
-# 版本号
+
+# --- 版本号 ---------------------------------------------------
 LLAMA_HELPER_VERSION="1.0.0"
 readonly LLAMA_HELPER_VERSION
