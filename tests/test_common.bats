@@ -326,14 +326,14 @@ teardown() {
 }
 
 # --- llama_run_silent ---
-# 契约：llama_run_silent 如实返回被包装命令的退出码；set -e 的调用者
-# 必须用 `llama_run_silent cmd || rc=$?`（或 if）捕获
-@test "llama_run_silent captures exit code via || under set -e" {
+# 契约：llama_run_silent <rc_var> <cmd...> 恒返回 0（set -e 的调用者不被中止）；
+# 退出码经 printf -v 写入 <rc_var>（必写，set -u 下读取安全）；
+# 误用（缺 rc_var / 变量名非法 / 保留前缀 _lrs_ / 无命令）返回非零。
+@test "llama_run_silent writes failure exit code to out-var and returns 0 under set -e" {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
-        rc=0
-        llama_run_silent false || rc=\$?
+        llama_run_silent rc false
         echo \"rc=\$rc\"
     "
     [ "$status" -eq 0 ]
@@ -343,8 +343,7 @@ teardown() {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
-        rc=0
-        llama_run_silent true || rc=\$?
+        llama_run_silent rc true
         echo \"rc=\$rc\"
     "
     [ "$status" -eq 0 ]
@@ -355,8 +354,7 @@ teardown() {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
-        rc=0
-        llama_run_silent bash -c 'exit 42' || rc=\$?
+        llama_run_silent rc bash -c 'exit 42'
         echo \"rc=\$rc\"
     "
     [ "$status" -eq 0 ]
@@ -367,8 +365,7 @@ teardown() {
     run --separate-stderr bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
-        rc=0
-        llama_run_silent bash -c 'echo FAIL_OUTPUT >&2; exit 7' || rc=\$?
+        llama_run_silent rc bash -c 'echo FAIL_OUTPUT >&2; exit 7'
         echo exit_code=\$rc
     "
     [ "$status" -eq 0 ]
@@ -382,11 +379,67 @@ teardown() {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
         set -e
-        llama_run_silent true
-        llama_run_silent false || true
+        llama_run_silent rc1 true
+        llama_run_silent rc2 false
         set -o | grep -q 'errexit.*on'
     "
     [ "$status" -eq 0 ]
+}
+
+@test "llama_run_silent usage errors return non-zero" {
+    # 缺 rc_var / 非法变量名 / 保留前缀 _lrs_ / 缺命令 —— 均按误用返回非零并报错；
+    # 断言报错文案以钉死「校验失败」而非碰巧的 command not found（旧实现
+    # 会把它们当命令执行，碰巧也返回非零）
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "变量名" ]]
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent '1bad' true
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "变量名" ]]
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent _lrs_ret true
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "变量名" ]]
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent rc
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "缺少命令" ]]
+}
+
+@test "llama_run_silent always writes out-var on failure (set -u read safe)" {
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -eu
+        llama_run_silent rc false
+        echo \"rc=\$rc\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "rc=1" ]]
+}
+
+@test "llama_run_silent out-var survives names colliding with implementation internals" {
+    # 动态作用域暗坑：实现内部的 local 会遮蔽调用者同名变量——printf -v ret
+    # 曾写到函数自己的 local ret 上，调用者永远拿不到值。实现改用 _lrs_ 前缀
+    # 内部名后，ret/tmp_out 等常见名必须能正确穿透。
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set -e
+        llama_run_silent ret bash -c 'exit 42'
+        llama_run_silent tmp_out bash -c 'exit 7'
+        echo \"ret=\$ret tmp_out=\$tmp_out\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "ret=42 tmp_out=7" ]]
 }
 
 @test "llama_activate_conda preserves caller errexit after activation (regression)" {

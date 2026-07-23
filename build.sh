@@ -344,10 +344,10 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         cmake_extra_args=()
     fi
 
-    # llama_run_silent 如实返回退出码；set -e 下必须用 || 捕获，
-    # 否则非零返回会立即中止脚本，下面的错误处理成为死代码
-    local cmake_exit=0
-    llama_run_silent cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
+    # llama_run_silent 恒返回 0，退出码写入 cmake_exit（先 local 声明，
+    # 动态作用域下的 printf -v 才会写入此局部变量）
+    local cmake_exit
+    llama_run_silent cmake_exit cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_C_COMPILER="$gcc_path" \
         -DCMAKE_CXX_COMPILER="$gxx_path" \
         -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
@@ -361,7 +361,7 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
         -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
         -DGGML_CUDA_GRAPHS="${GGML_CUDA_GRAPHS}" \
-        ${cmake_extra_args[@]+"${cmake_extra_args[@]}"} || cmake_exit=$?
+        ${cmake_extra_args[@]+"${cmake_extra_args[@]}"}
 
     if [[ "$cmake_exit" -ne 0 ]]; then
         llama_die "CMake 配置失败 (退出码: $cmake_exit)"
@@ -372,8 +372,8 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     # --- 步骤 3：编译 --------------------------------------------
     llama_step "步骤 3/4：编译（${jobs} 核并行）"
 
-    local build_exit=0
-    llama_run_silent cmake --build "$BUILD_DIR" -j "$jobs" || build_exit=$?
+    local build_exit
+    llama_run_silent build_exit cmake --build "$BUILD_DIR" -j "$jobs"
 
     if [[ "$build_exit" -ne 0 ]]; then
         llama_die "编译失败 (退出码: $build_exit)"

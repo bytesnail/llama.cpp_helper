@@ -852,33 +852,58 @@ llama_print_run_examples() {
     echo "  ${bin_dir}/llama-server -m /path/to/model.gguf -ngl 99 --port 8080"
 }
 
-# Usage: llama_run_silent <command> [args...]
-# 在禁用 set -e 的情况下运行命令并捕获输出。失败时将输出发送到 stderr。
-# 注意：本函数如实返回被包装命令的退出码——set -e 的调用者必须用
-# `llama_run_silent cmd || rc=$?`（或 if）捕获，否则非零返回会中止脚本。
+# Usage: llama_run_silent <rc_var> <command> [args...]
+# 在禁用 set -e 的情况下运行命令并捕获输出；退出码经 printf -v 写入 <rc_var>。
+# 契约：
+#   - 恒返回 0 —— 被包装命令失败不会中止 set -e 的调用者；状态只经 <rc_var> 传递。
+#     如何响应失败（die / 回滚 / 忽略）由调用者读取 <rc_var> 决定
+#   - <rc_var> 必写（含失败路径），调用者在 set -u 下读取安全；调用点应先
+#     local 声明该变量，使动态作用域下的 printf -v 写入局部变量而非产生全局变量
+#   - 命令失败时 warn 并转储捕获输出到 stderr
+#   - 误用（rc_var 缺失/非法、保留前缀 _lrs_、缺少命令）返回 2 —— 程序员错误，
+#     与被包装命令的失败是两类，必须大声失败
+# 内部局部变量使用 _lrs_ 前缀：动态作用域下同名的函数内 local 会遮蔽调用者
+# 变量，printf -v 会写到函数自己的 local 上（调用者永远拿不到值）；保留前缀
+# 使碰撞在结构上不可能。
 llama_run_silent() {
-    local ret
-    local tmp_out
-    tmp_out=$(mktemp "${TMPDIR:-/tmp}/llama_run_silent.XXXXXX" 2>/dev/null) || tmp_out=""
+    local _lrs_rc_var="${1:-}"
+    if [[ ! "$_lrs_rc_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ || "$_lrs_rc_var" == _lrs_* ]]; then
+        llama_err "llama_run_silent: 无效或保留的输出变量名: ${_lrs_rc_var:-<空>}（_lrs_ 前缀为实现保留）"
+        return 2
+    fi
+    shift
+    if (($# == 0)); then
+        llama_err "llama_run_silent: 缺少命令"
+        return 2
+    fi
+
+    # 先落默认值：任何后续路径都保证 <rc_var> 必写（set -u 调用者读取安全）；
+    # 默认非零——命令未运行按失败处理，绝不谎报成功
+    printf -v "$_lrs_rc_var" '%s' 1
+
+    local _lrs_tmp_out
+    _lrs_tmp_out=$(mktemp "${TMPDIR:-/tmp}/llama_run_silent.XXXXXX" 2>/dev/null) || _lrs_tmp_out=""
     # 与 llama_activate_conda 同理：不能用 prev_opts=$(set +o) 保存/恢复
     # errexit——bash 默认在命令替换子 shell 中重置 errexit（inherit_errexit
     # 默认 off），eval 恢复后会把调用者的 set -e 永久静默关闭（已实证）。
     # $- 在当前 shell 读取，|| / if 等豁免上下文中仍反映真实选项状态。
-    local restore_e=0
-    if [[ $- == *e* ]]; then restore_e=1; fi
+    local _lrs_restore_e=0
+    if [[ $- == *e* ]]; then _lrs_restore_e=1; fi
     set +e
-    if [[ -n "$tmp_out" ]]; then
-        "$@" >"$tmp_out" 2>&1
-        ret=$?
-        if [[ "$ret" -ne 0 ]]; then
-            llama_warn "命令失败 (退出码: ${ret})"
-            cat "$tmp_out" >&2 2>/dev/null || true
+    local _lrs_ret
+    if [[ -n "$_lrs_tmp_out" ]]; then
+        "$@" >"$_lrs_tmp_out" 2>&1
+        _lrs_ret=$?
+        if [[ "$_lrs_ret" -ne 0 ]]; then
+            llama_warn "命令失败 (退出码: ${_lrs_ret})"
+            cat "$_lrs_tmp_out" >&2 2>/dev/null || true
         fi
-        rm -f "$tmp_out"
+        rm -f "$_lrs_tmp_out"
     else
         "$@"
-        ret=$?
+        _lrs_ret=$?
     fi
-    if ((restore_e)); then set -e; fi
-    return "$ret"
+    if ((_lrs_restore_e)); then set -e; fi
+    printf -v "$_lrs_rc_var" '%s' "$_lrs_ret"
+    return 0
 }

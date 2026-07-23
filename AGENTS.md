@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（166 项）
+make test           # bats-core 测试套件（169 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -137,7 +137,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 - **防直接执行**：`run_env.sh`、`config.sh` 检测 `BASH_SOURCE[0] == $0` 并报错
 - **退出路径**：`llama_return_or_exit` — 用 `BASH_SOURCE[1] == $0` 判断上下文：脚本上下文 `exit`，source 上下文 `return`（函数体内 `return` 永远合法，不能靠 return 失败检测）
 - **信号处理**：`llama_setup_trap <cmd>` 注册 SIGINT/SIGTERM；`llama_cleanup_trap` 重置。`build.sh` 的信号 trap 显式传入退出码（`trap '_cleanup_on_exit 130' SIGINT`）——信号在 builtin 间隙到达时 `$?` 可能为 0，会跳过清理并以 0 退出（下游误判构建成功）
-- **命令包装**：`llama_run_silent` 临时禁用 `set -e` 运行命令并**如实返回其退出码**——`set -e` 的调用者必须用 `llama_run_silent cmd || rc=$?`（或 `if`）捕获，否则非零返回会中止脚本、错误处理成为死代码
+- **命令包装**：`llama_run_silent <rc_var> <cmd...>` 临时禁用 `set -e` 运行命令并捕获输出——**恒返回 0**，退出码经 `printf -v` 写入 `<rc_var>`（必写，`set -u` 下读取安全）；调用点先 `local` 声明该变量（动态作用域下 `printf -v` 才会写入局部变量），再读取它决定失败响应（die/回滚）。误用（缺/非法变量名、保留前缀 `_lrs_`、缺命令）返回 2 大声失败——与被包装命令的失败是两类
 - **保存/恢复 errexit 必须用 `$-`**：绝不能用 `prev_opts=$(set +o)` 保存 shell 选项——bash 默认在命令替换子 shell 中重置 errexit（`shopt inherit_errexit` 默认 off），捕获到的恒为 `set +o errexit`，`eval` 恢复后会把调用者的 `set -e` 永久静默关闭。正确写法：`if [[ $- == *e* ]]; then restore_e=1; fi`（`$-` 在当前 shell 读取，`||`/`if` 豁免上下文中仍正确）。参考 `llama_run_silent`、`llama_activate_conda`
 - **管线赋值防护**：`var=$(cmd | cmd)` 在 `set -euo pipefail` 下，若管线可能返回非零（如 `grep` 无匹配、外部工具缺失），必须加 `|| true`——否则会中止脚本，使文档承诺的优雅降级路径（空串/0/回退）无法到达。参考 `common.sh` 中 `_llama_lscpu_field`、`llama_print_hardware_summary`、`llama_hw_cpu_*` 的实现
 - **测试提取模式**：`_LLAMA_SOURCE_ONLY=1` 允许测试 source 入口脚本时跳过锁获取和 trap 注册等副作用

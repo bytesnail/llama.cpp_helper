@@ -550,10 +550,10 @@ _build_with_rollback() {
     # 在启动 build.sh 前释放锁 — build.sh 会获取自己的锁，
     # 同时持有两个锁会导致死锁（同一锁文件、同一 UID）。
     llama_release_lock
-    # llama_run_silent 如实返回退出码；set -e 下必须用 || 捕获，
-    # 否则构建失败会直接中止脚本，下方回滚逻辑全部成为死代码
-    local build_status=0
-    llama_run_silent bash "$BUILD_SCRIPT" || build_status=$?
+    # llama_run_silent 恒返回 0，退出码写入 build_status（先 local 声明，
+    # 动态作用域下的 printf -v 才会写入此局部变量）
+    local build_status
+    llama_run_silent build_status bash "$BUILD_SCRIPT"
 
     # 更新前的版本优先使用 tag，获取不到时回退到 commit id
     local before_ver="${current_tag:-$current_short}"
@@ -575,8 +575,8 @@ _build_with_rollback() {
         llama_release_lock
         llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
         llama_step "回滚后重新构建..."
-        local rollback_build_status=0
-        llama_run_silent bash "$BUILD_SCRIPT" || rollback_build_status=$?
+        local rollback_build_status
+        llama_run_silent rollback_build_status bash "$BUILD_SCRIPT"
         if [[ "$rollback_build_status" -ne 0 ]]; then
             llama_err "回滚后构建也失败"
             _print_recovery_steps
