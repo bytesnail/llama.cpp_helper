@@ -55,6 +55,24 @@ GGML_BLAS="${GGML_BLAS:-ON}"
 GGML_BLAS_VENDOR="${GGML_BLAS_VENDOR:-OpenBLAS}"
 LLAMA_BUILD_TESTS="${LLAMA_BUILD_TESTS:-OFF}" # 是否构建 llama.cpp 自身测试（节省编译时间默认 OFF）
 
+# 构建旋钮表：build.sh 按此表循环生成 cmake -D 透传参数（单一事实来源）。
+# 新增构建旋钮 = 在上方定义变量（${VAR:-default}）+ 在此表登记名字，build.sh 无需改动；
+# 表内名字与本节变量定义的同步由 test_smoke.bats 钉住。
+# declare -ar 是 Bash 中声明只读数组的唯一方式（readonly 无法作用于数组）
+declare -ar LLAMA_CMAKE_KNOBS=(
+    CMAKE_BUILD_TYPE
+    CMAKE_CUDA_ARCHITECTURES
+    CMAKE_CUDA_FLAGS
+    GGML_CUDA
+    GGML_CUDA_PEER_MAX_BATCH_SIZE
+    GGML_CUDA_FA_ALL_QUANTS
+    GGML_CUDA_GRAPHS
+    GGML_NATIVE
+    GGML_BLAS
+    GGML_BLAS_VENDOR
+    LLAMA_BUILD_TESTS
+)
+
 # --- conda 配置 ----------------------------------------------
 CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境名称

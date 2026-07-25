@@ -344,23 +344,21 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         cmake_extra_args=()
     fi
 
+    # 由 config.sh 的 LLAMA_CMAKE_KNOBS 旋钮表生成 -D 透传参数：
+    # 新增/调整构建旋钮只需改 config.sh，此处无需同步修改；
+    # ${!knob} 间接展开在旋钮未定义时由 set -u 大声失败（而非静默漏传）
+    local cmake_knob_args=() knob
+    for knob in "${LLAMA_CMAKE_KNOBS[@]}"; do
+        cmake_knob_args+=("-D${knob}=${!knob}")
+    done
+
     # llama_run_silent 恒返回 0，退出码写入 cmake_exit（先 local 声明，
     # 动态作用域下的 printf -v 才会写入此局部变量）
     local cmake_exit
     llama_run_silent cmake_exit cmake -S "$LLAMA_CPP_SRC" -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_C_COMPILER="$gcc_path" \
         -DCMAKE_CXX_COMPILER="$gxx_path" \
-        -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
-        -DLLAMA_BUILD_TESTS="${LLAMA_BUILD_TESTS}" \
-        -DGGML_NATIVE="${GGML_NATIVE}" \
-        -DGGML_BLAS="${GGML_BLAS}" \
-        -DGGML_BLAS_VENDOR="${GGML_BLAS_VENDOR}" \
-        -DGGML_CUDA="${GGML_CUDA}" \
-        -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}" \
-        -DCMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}" \
-        -DGGML_CUDA_PEER_MAX_BATCH_SIZE="${GGML_CUDA_PEER_MAX_BATCH_SIZE}" \
-        -DGGML_CUDA_FA_ALL_QUANTS="${GGML_CUDA_FA_ALL_QUANTS}" \
-        -DGGML_CUDA_GRAPHS="${GGML_CUDA_GRAPHS}" \
+        ${cmake_knob_args[@]+"${cmake_knob_args[@]}"} \
         ${cmake_extra_args[@]+"${cmake_extra_args[@]}"}
 
     if [[ "$cmake_exit" -ne 0 ]]; then

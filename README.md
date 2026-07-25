@@ -250,6 +250,7 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 | `REPO_URL` | `https://github.com/ggml-org/llama.cpp` | GitHub 仓库 URL（update.sh remote 验证） |
 | `_LLAMA_PROJECT_ROOT` | 自动检测 | 本项目的绝对路径（用于计算默认 `LLAMA_CPP_SRC`） |
 | `BUILD_DIR` / `BUILD_BIN_DIR` / `BUILD_STAMP` | `${LLAMA_CPP_SRC}/build` 及其子路径 | 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议） |
+| `LLAMA_CMAKE_KNOBS` | 上表 11 个构建变量名 | 构建旋钮表：build.sh 按此表循环生成 cmake `-D` 透传参数 |
 **使用示例：**
 
 ```bash

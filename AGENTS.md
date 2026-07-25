@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（169 项）
+make test           # bats-core 测试套件（172 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -77,7 +77,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 | 层 | 文件 | 职责 |
 |----|------|------|
-| 配置层 | `config.sh` | 纯数据：路径、构建常量、版本号。用 `${VAR:-default}` 允许环境覆盖 |
+| 配置层 | `config.sh` | 纯数据：路径、构建常量、构建旋钮表（`LLAMA_CMAKE_KNOBS`）、版本号。用 `${VAR:-default}` 允许环境覆盖 |
 | 工具层 | `common.sh` | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、**硬件信息采集**（CPU 拓扑/指令集/内存/GPU/NVLink）、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
 | 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
 | 测试层 | `tests/` | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
@@ -90,6 +90,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 | 修改更新逻辑 | `update.sh` → `_update_source()` / `_build_with_rollback()` | 查询 → 切换 → 构建 → 回滚链路 |
 | 添加新工具函数 | `common.sh` | 遵循 `llama_` 公开 / `_` 私有两级命名 |
 | 修改配置默认值 | `config.sh` | 所有变量用 `${VAR:-default}` 模式 |
+| 添加/删除构建旋钮 | `config.sh` → `LLAMA_CMAKE_KNOBS` | 定义变量 + 登记旋钮表；`build.sh` 循环生成 `-D`，无需改动 |
 | 修改测试 | `tests/test_<name>.bats` | 每脚本对应一个文件 |
 | 测试辅助函数 | `tests/test_helper.bash` | setup/teardown + 共享 fixture |
 | ShellCheck 规则调整 | `.shellcheckrc` | 每条 disable 有注释说明原因 |

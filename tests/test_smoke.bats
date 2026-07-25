@@ -51,6 +51,43 @@ load test_helper
     [ "$status" -eq 0 ]
 }
 
+@test "LLAMA_CMAKE_KNOBS contains exactly the expected cmake knobs" {
+    # 旋钮表是 cmake -D 透传的单一事实来源；新增/删除旋钮需同步更新此清单
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../config.sh' 2>/dev/null
+        expected='CMAKE_BUILD_TYPE CMAKE_CUDA_ARCHITECTURES CMAKE_CUDA_FLAGS GGML_CUDA GGML_CUDA_PEER_MAX_BATCH_SIZE GGML_CUDA_FA_ALL_QUANTS GGML_CUDA_GRAPHS GGML_NATIVE GGML_BLAS GGML_BLAS_VENDOR LLAMA_BUILD_TESTS'
+        [[ \"\${LLAMA_CMAKE_KNOBS[*]}\" == \"\$expected\" ]]
+    "
+    [ "$status" -eq 0 ]
+}
+
+@test "every knob in LLAMA_CMAKE_KNOBS has a non-empty definition" {
+    # 表内名字必须对应已定义变量，否则 build.sh 的 \${!knob} 间接展开会在 set -u 下中止
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../config.sh' 2>/dev/null
+        [[ \${#LLAMA_CMAKE_KNOBS[@]} -gt 0 ]] || exit 1
+        for knob in \"\${LLAMA_CMAKE_KNOBS[@]}\"; do
+            [[ -n \"\${!knob}\" ]] || { echo \"knob undefined or empty: \$knob\"; exit 1; }
+        done
+    "
+    [ "$status" -eq 0 ]
+}
+
+@test "every variable in config.sh build section is listed in LLAMA_CMAKE_KNOBS" {
+    # 反向同步：构建配置节新增的 VAR=\${VAR:-...} 定义必须登记到旋钮表
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../config.sh' 2>/dev/null
+        names=\$(sed -n '/^# --- 构建配置/,/^# --- /p' '${BATS_TEST_DIRNAME}/../config.sh' \
+            | grep -oP '^[A-Z_]+(?==)' | sort -u)
+        [[ -n \"\$names\" ]] || exit 1
+        for name in \$names; do
+            printf '%s\n' \"\${LLAMA_CMAKE_KNOBS[@]}\" | grep -qx \"\$name\" \
+                || { echo \"missing from LLAMA_CMAKE_KNOBS: \$name\"; exit 1; }
+        done
+    "
+    [ "$status" -eq 0 ]
+}
+
 @test "no script mixes tabs and spaces for indentation" {
     # All .sh scripts use space indentation per .editorconfig
     run bash -c "
