@@ -266,36 +266,6 @@ teardown() {
     [ "$status" -eq 1 ]
 }
 
-# --- llama_cd_back ---
-@test "llama_cd_back returns 0 when orig_dir is unset" {
-    unset orig_dir
-    run llama_cd_back
-    [ "$status" -eq 0 ]
-}
-
-@test "llama_cd_back changes to orig_dir when set" {
-    run bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
-        orig_dir='/tmp'
-        llama_cd_back
-        pwd
-    "
-    [ "$status" -eq 0 ]
-    [ "$output" = "/tmp" ]
-}
-
-@test "llama_cd_back returns 1 and warns when orig_dir is nonexistent" {
-    run bash -c "
-        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
-        orig_dir='/nonexistent_dir_xyz_123'
-        llama_cd_back
-        echo \$?
-    "
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "无法返回原始目录" ]]
-    [[ "$output" =~ 1 ]]
-}
-
 # --- Init/Source/Help Helpers ---
 @test "llama_init_script_dir sets SCRIPT_DIR" {
     llama_init_script_dir

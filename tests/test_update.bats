@@ -124,6 +124,42 @@ load test_helper
     [[ ! -d "${fake_repo}/.git/modules/old_sub" ]]
 }
 
+# --- C3：无 cwd 环境契约（所有 git 调用显式 -C）---
+
+@test "_check_local_repo does not change the caller's working directory" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    local before_pwd="$PWD"
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/llama.cpp"
+    _check_local_repo >/dev/null 2>&1
+    [ "$PWD" = "$before_pwd" ]
+}
+
+@test "_update_source works from an unrelated cwd (git -C everywhere)" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    # 源仓库：含本地标签 b4000；origin 指向本地 bare 克隆（离线可 fetch）
+    local fake_repo="${TEST_TMPDIR}/src_repo"
+    local origin_repo="${TEST_TMPDIR}/origin.git"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    git -C "$fake_repo" tag b4000
+    git clone -q --bare "$fake_repo" "$origin_repo"
+    git -C "$fake_repo" remote add origin "$origin_repo"
+
+    # 关键：在「非 git 仓库」目录中调用——若实现依赖 cwd 解析仓库，
+    # git fetch 会立即以 not a git repository 失败
+    cd "${TEST_TMPDIR}"
+    LLAMA_CPP_SRC="$fake_repo"
+    release_tag="b4000"
+    current_commit="$(git -C "$fake_repo" rev-parse HEAD)"
+    current_short="${current_commit:0:7}"
+
+    run _update_source
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "源码已更新到 b4000" ]]
+}
+
 @test "_json_field extracts field from valid JSON" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 

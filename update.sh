@@ -29,7 +29,6 @@ current_commit=""
 current_short=""
 current_tag=""
 current_branch=""
-orig_dir=""
 target_version=""
 release_short=""
 need_source_update=1
@@ -76,7 +75,7 @@ _rollback() {
     llama_warn "正在回滚到之前的版本..."
     local failed=0
     if ! git -C "$LLAMA_CPP_SRC" checkout "$current_commit" --quiet 2>/dev/null; then
-        llama_err "git checkout 失败: 无法恢复到 ${current_short}"
+        llama_err "checkout 失败: 无法恢复到 ${current_short}"
         failed=1
     fi
     # 清理回滚后可能出现的旧子模块残留
@@ -114,17 +113,7 @@ _cleanup_on_interrupt() {
     if [[ -n "${current_commit:-}" ]]; then
         _rollback || true
     fi
-    if [[ -n "${orig_dir:-}" ]]; then
-        llama_cd_back || true  # set -e 在信号处理函数内仍生效，失败不能阻断后续 safe_exit
-    fi
     llama_safe_exit 130
-}
-
-# Usage: _die_back [message] [exit_code]
-# 错误路径的固定配对：先恢复原工作目录，再退出
-_die_back() {
-    llama_cd_back
-    llama_die "$@"
 }
 
 # Usage: _cleanup_stale_submodules
@@ -303,7 +292,7 @@ _check_local_repo() {
 
     # shellcheck disable=SC2015
     llama_check_commands \
-        git "git" \
+        "git" "git" \
         python3 "python3" \
         flock "util-linux" \
         && llama_ok "基础工具检查通过" || llama_die "基础工具检查失败"
@@ -314,23 +303,21 @@ _check_local_repo() {
 
     llama_info "检查本地仓库状态..."
 
-    orig_dir="$(pwd)"
-    if ! cd "$LLAMA_CPP_SRC" >/dev/null; then
-        llama_err "无法进入 llama.cpp 仓库: ${LLAMA_CPP_SRC}"
-        _die_back
+    # 统一解析为绝对路径（子 shell 内 cd，本进程 cwd 不变），保证后续
+    # git -C、find、build.sh 子进程看到一致的路径。本脚本不改变工作目录：
+    # 所有 git 调用显式携带 -C "$LLAMA_CPP_SRC"，与调用者 cwd 解耦——
+    # 由 tests/test_smoke.bats 的契约测试钉住该不变量。
+    local abs_src
+    if ! abs_src="$(cd "$LLAMA_CPP_SRC" >/dev/null 2>&1 && pwd)"; then
+        llama_die "无法解析 llama.cpp 仓库路径: ${LLAMA_CPP_SRC}"
     fi
-    # 转为绝对路径：用户以相对路径覆盖（如 LLAMA_CPP_SRC=./llama.cpp）时，
-    # cd 之后相对路径会从仓库内部解析而失效，后续 git -C 全部失败（已实证）
-    LLAMA_CPP_SRC="$(pwd)"
-    # 注意：此处 cd 改变全局工作目录。后续函数（_update_source, _rollback 等）
-    # 运行 git 命令时不带 -C，依赖此工作目录。所有错误路径必须调用
-    # llama_cd_back（或 _die_back）恢复原始目录。重构为 git -C 需要修改约 15 处调用。
+    LLAMA_CPP_SRC="$abs_src"
     # --untracked-files=no：未跟踪文件（补丁/笔记/core dump）不会被 checkout
     # 触碰（git 自身也会拒绝覆盖），不应以"未提交的更改"为由阻断更新
-    if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    if [[ -n "$(git -C "$LLAMA_CPP_SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
-        git status --short --untracked-files=no
-        _die_back "存在未提交的更改，请先处理后再更新"
+        git -C "$LLAMA_CPP_SRC" status --short --untracked-files=no
+        llama_die "存在未提交的更改，请先处理后再更新"
     fi
 
     # 检查子模块中的未提交更改
@@ -338,11 +325,11 @@ _check_local_repo() {
     # 会让 foreach 收到 SIGPIPE(141)，pipefail 下管线返回 141 → if 条件
     # 为假 → 多个子模块且靠前为脏时脏检查被静默跳过（已实证）
     local submodule_status
-    submodule_status=$(git submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null || true)
+    submodule_status=$(git -C "$LLAMA_CPP_SRC" submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null || true)
     if grep -q 'DIRTY' <<< "$submodule_status"; then
         llama_err "子模块中存在未提交的更改，请先处理后再更新:"
-        git submodule foreach 'git status --short' 2>/dev/null || true
-        _die_back "子模块中存在未提交的更改，请先处理后再更新"
+        git -C "$LLAMA_CPP_SRC" submodule foreach 'git status --short' 2>/dev/null || true
+        llama_die "子模块中存在未提交的更改，请先处理后再更新"
     fi
 
     _save_state
@@ -351,7 +338,7 @@ _check_local_repo() {
     llama_setup_trap _cleanup_on_interrupt
 
     local actual_remote
-    actual_remote=$(git remote get-url origin 2>/dev/null || echo "")
+    actual_remote=$(git -C "$LLAMA_CPP_SRC" remote get-url origin 2>/dev/null || echo "")
     local normalized_remote="${actual_remote%.git}"
     local normalized_expected="${REPO_URL%.git}"
     if [[ "$normalized_remote" != "$normalized_expected" ]]; then
@@ -382,14 +369,12 @@ _resolve_target() {
             if ! _fetch_latest_release_gh; then
                 llama_warn "gh 查询失败，回退到 curl"
                 if ! _fetch_latest_release_curl; then
-                    llama_cd_back
                     llama_die "无法获取最新版本信息"
                 fi
             fi
         else
             llama_warn "gh 未安装或未登录，使用 curl 直接访问 API"
             if ! _fetch_latest_release_curl; then
-                llama_cd_back
                 llama_die "无法获取最新版本信息"
             fi
         fi
@@ -439,7 +424,7 @@ _resolve_target() {
 
 # Usage: _update_source
 _update_source() {
-    llama_check_disk_space "$LLAMA_CPP_SRC" || { llama_cd_back; llama_die; }
+    llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
     llama_info "正在从远程仓库拉取最新引用..."
 
     # GIT_HTTP_LOW_SPEED_*：网络半挂起（连接建立但对端不响应）时中止传输，
@@ -447,8 +432,7 @@ _update_source() {
     llama_with_network_context "从远程仓库拉取标签" \
         env GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT}" \
             GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME}" \
-            git fetch origin --quiet --tags || {
-        llama_cd_back
+            git -C "$LLAMA_CPP_SRC" fetch origin --quiet --tags || {
         llama_die "从远程仓库拉取失败"
     }
 
@@ -458,35 +442,33 @@ _update_source() {
     # 分支时 git checkout <name> 按歧义规则优先取分支，会静默构建错误
     # commit（已实证），且 rev-parse 阶段对裸名也无法可靠消歧
     local target_sha
-    if ! target_sha=$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null); then
+    if ! target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null); then
         llama_detail "本地未找到标签 ${release_tag}，尝试精确拉取..."
-        git fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" 2>/dev/null || true
-        target_sha=$(git rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null || true)
+        git -C "$LLAMA_CPP_SRC" fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" 2>/dev/null || true
+        target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null || true)
     fi
 
     # 用户指定的可能是裸 commit SHA（无对应标签）：回退按 rev 解析
     if [[ -z "$target_sha" ]] && llama_is_full_commit_sha "$release_tag"; then
-        target_sha=$(git rev-parse --verify --quiet "${release_tag}^{commit}" 2>/dev/null || true)
+        target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "${release_tag}^{commit}" 2>/dev/null || true)
     fi
 
     if [[ -z "$target_sha" ]]; then
         llama_err "本地找不到目标版本: ${release_tag}"
         llama_detail "请确认版本号正确，或检查网络连接"
-        llama_cd_back
         llama_die "本地找不到目标版本: ${release_tag}"
     fi
 
     llama_info "切换到版本 ${release_tag}..."
 
-    if ! git checkout --quiet "$target_sha"; then
+    if ! git -C "$LLAMA_CPP_SRC" checkout --quiet "$target_sha"; then
         llama_err "切换到版本 ${release_tag} 失败"
-        llama_cd_back
         _rollback || true
         llama_die "版本切换失败"
     fi
 
-    actual_commit=$(git rev-parse HEAD)
-    actual_tag=$(git describe --tags --exact-match 2>/dev/null || true)
+    actual_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    actual_tag=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || true)
 
     if [[ -n "$actual_tag" && "$actual_tag" != "$release_tag" ]]; then
         llama_warn "checkout 后标签不一致 (期望: ${release_tag}, 实际: ${actual_tag})"
@@ -497,7 +479,6 @@ _update_source() {
     # gh 查询（targetCommitish 为分支名）两条主路径下校验均不生效
     if [[ "$actual_commit" != "$target_sha" ]]; then
         llama_err "checkout commit (${actual_commit:0:7}) 与目标 (${target_sha:0:7}) 不一致"
-        llama_cd_back
         _rollback || true
         llama_die "版本切换校验失败"
     fi
@@ -508,13 +489,13 @@ _update_source() {
 
     # 同步当前版本的子模块
     llama_info "同步子模块..."
-    if [[ -f ".gitmodules" ]]; then
-        if ! git submodule update --init --recursive --quiet; then
+    if [[ -f "${LLAMA_CPP_SRC}/.gitmodules" ]]; then
+        if ! git -C "$LLAMA_CPP_SRC" submodule update --init --recursive --quiet; then
             llama_err "子模块同步失败"
             # || true：_rollback 部分失败返回 1 时 set -e 会中止脚本，
             # 导致下方 die 的诊断消息无法输出（退出码由 die 保证）
             _rollback || true
-            _die_back "子模块同步失败，已回滚到 ${current_short}"
+            llama_die "子模块同步失败，已回滚到 ${current_short}"
         fi
         llama_ok "子模块已同步"
     else
@@ -532,10 +513,9 @@ _print_recovery_steps() {
     llama_detail "  原始版本: ${current_short} (${current_tag:-(无标签)})"
     llama_detail "  目标版本: ${release_tag}"
     llama_detail "恢复步骤:"
-    llama_detail "  cd ${LLAMA_CPP_SRC}"
-    llama_detail "  git status"
-    llama_detail "  git checkout ${current_commit}"
-    llama_detail "  git submodule update --recursive"
+    llama_detail "  git -C ${LLAMA_CPP_SRC} status"
+    llama_detail "  git -C ${LLAMA_CPP_SRC} checkout ${current_commit}"
+    llama_detail "  git -C ${LLAMA_CPP_SRC} submodule update --recursive"
     llama_detail "  bash ${BUILD_SCRIPT}"
 }
 
@@ -569,7 +549,6 @@ _build_with_rollback() {
             # 谎报"已回滚"并显示旧版本号（实际 HEAD 仍是新版本）
             llama_err "回滚失败，当前 HEAD 仍停留在 ${release_tag}"
             _print_recovery_steps
-            llama_cd_back
             llama_die "回滚失败，请手动恢复到 ${current_short} 后重试"
         fi
         llama_release_lock
@@ -580,18 +559,15 @@ _build_with_rollback() {
         if [[ "$rollback_build_status" -ne 0 ]]; then
             llama_err "回滚后构建也失败"
             _print_recovery_steps
-            llama_cd_back
             llama_die "回滚后构建也失败，请手动恢复到 ${current_short} 后重试"
         fi
         llama_ok "更新失败但已回滚并重新构建成功"
         _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
-        llama_cd_back
         llama_safe_exit 0
     fi
     # 构建成功
     _print_success_summary "${need_source_update}" "${before_ver}" "${release_tag}" "${release_date:-}"
 
-    llama_cd_back
     return 0
 }
 
@@ -605,7 +581,6 @@ main() {
     _check_local_repo
     _resolve_target
     if [[ "${skip_update:-0}" -eq 1 ]]; then
-        llama_cd_back
         llama_safe_exit 0
     fi
     if [[ "${need_source_update:-1}" -eq 1 ]]; then

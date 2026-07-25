@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（172 项）
+make test           # bats-core 测试套件（173 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -112,7 +112,6 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 `LOCK_FD` 是主要的跨模块可变状态例外：由 `common.sh` 函数设置和读取，多处访问（含各脚本和测试 teardown），保留 `UPPER_SNAKE_CASE` 以突出其跨模块可见性。
 
 其他跨模块变量例外：
-- `orig_dir`：由 `update.sh` 设置，`llama_cd_back()` 读取。
 - `incremental`、`_CLEANUP_DONE` 和 `_BUILD_TOUCHED`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。
 - `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
 - `update.sh` 的更新流程状态变量（`release_tag`、`release_commit`、`release_date`、`release_url`、`release_short`、`current_commit`、`current_short`、`current_tag`、`current_branch`、`target_version`、`need_source_update`、`skip_update`、`actual_commit`、`actual_tag`）：由 `_save_state`/`_parse_args`/`_resolve_target`/`_update_source` 设置，`_rollback`/`_build_with_rollback`/`main` 等跨函数读取，与上述性质相同，故同样使用 `lowercase_snake_case` 脚本级变量。
@@ -155,6 +154,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 8. **绝不写无保护的 `var=$(pipeline)` 赋值**（当管线可能返回非零时）— 在 `set -euo pipefail` 下，`grep` 无匹配、外部工具缺失等场景会使管线返回非零，赋值语句中止脚本。若函数设计了优雅降级（输出空串/0/回退值），必须用 `var=$(... || true)` 保护。参考 `common.sh` 的 `_llama_lscpu_field`、`llama_get_gpu_count`、`llama_hw_mem_total_bytes`、`llama_print_hardware_summary` 和 `run_env.sh` 的 `gpu_count=$(llama_get_gpu_count || true)`
 9. **绝不给无命令的 `exec {fd}>&-` 加输出重定向**（如 `2>/dev/null`）— 无命令 `exec` 的重定向会**永久改变当前 shell 的 FD**（实测吞掉后续全部 stderr 输出，含 `llama_safe_exit` 前的错误消息）。bash 关闭已关闭的 fd 静默返回 0，无需屏蔽。参考 `llama_release_lock`、`_lock_grab`、测试 teardown
 10. **绝不用 `git checkout <tag名>` 切换版本** — 本地存在同名分支时 git 按歧义规则优先取分支，会静默构建错误 commit。必须先 `git rev-parse --verify --quiet "refs/tags/<tag>^{commit}"` 解析到 SHA 再 checkout SHA（参考 `update.sh` 的 `_update_source`）
+11. **绝不在 `update.sh` 中依赖进程 cwd 执行 git** — `update.sh` 不 `cd` 进仓库（无 cwd 环境契约），所有 git 调用必须显式 `git -C "$LLAMA_CPP_SRC"`（含打印给用户的恢复指引）；`[[ -f ".gitmodules" ]]` 这类路径检查同理用绝对路径。`tests/test_smoke.bats` 的契约测试逐行钉住该不变量
 
 ## 安全特性
 

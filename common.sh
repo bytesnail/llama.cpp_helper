@@ -751,18 +751,6 @@ llama_human_size() {
 }
 
 # --- 退出辅助 ------------------------------------------------
-# Usage: llama_cd_back
-# 安全返回 orig_dir。为 update.sh 错误路径设计。
-llama_cd_back() {
-    if [[ -z "${orig_dir:-}" ]]; then
-        return 0
-    fi
-    cd "$orig_dir" >/dev/null 2>&1 || {
-        llama_warn "无法返回原始目录: ${orig_dir}"
-        return 1
-    }
-}
-
 # Usage: llama_die [message] [exit_code]
 llama_die() {
     local msg="${1:-}"
