@@ -129,6 +129,15 @@ _cleanup_on_interrupt() {
     # 复用 _rollback 完整逻辑（含子模块残留清理与分支恢复）——原内联子集
     # 缺少 _cleanup_stale_submodules，与显式回滚的行为已发生漂移
     if [[ -n "${current_commit:-}" ]]; then
+        # 与 _build_with_rollback 同一不变量：回滚修改源码树前须持有锁。
+        # LOCK_FD 非空说明本进程仍持锁（_update_source 阶段中断）；
+        # 为空说明锁已释放（构建阶段中断，build.sh 子进程可能正持有），
+        # 尝试重取——取锁失败不阻塞回滚（安全路径必须执行）
+        if [[ -z "${LOCK_FD:-}" ]]; then
+            if ! llama_acquire_lock; then
+                llama_warn "无法重新获取锁，回滚将在无锁保护下进行"
+            fi
+        fi
         _rollback || true
     fi
     llama_safe_exit 130
@@ -646,7 +655,10 @@ _build_with_rollback() {
         _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
         llama_safe_exit 0
     fi
-    # 构建成功
+    # 构建成功——更新事务已提交：解除中断恢复 trap。否则成功摘要打印期间
+    # 收到 SIGINT/SIGTERM 会把已完成的更新 _rollback 回旧版本（trap 在
+    # _check_local_repo 注册后全程有效，本路径此前从不解除）
+    llama_cleanup_trap
     _print_success_summary "${need_source_update}" "${before_ver}" "${release_tag}" "${release_date:-}"
 
     return 0
