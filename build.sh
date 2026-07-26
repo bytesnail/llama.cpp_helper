@@ -192,9 +192,9 @@ _verify_openblas_runtime() {
 # Usage: _verify_build
 _verify_build() {
     local errors=0
-    # BUILD_BIN_DIR 由 config.sh 统一定义（_LLAMA_SOURCE_ONLY 提取模式同样
-    # 经 build.sh 顶部 source config.sh 获得，不再依赖被跳过的顶层赋值）
-    local bin_dir="${BUILD_BIN_DIR:-${BUILD_DIR}/bin}"
+    # BUILD_BIN_DIR 由 config.sh 无条件定义（本脚本顶部恒 source，含
+    # _LLAMA_SOURCE_ONLY 提取模式）——无回退，直接引用
+    local bin_dir="$BUILD_BIN_DIR"
     local verify_binary="${REQUIRED_BINARIES[0]}"
 
     # 对同一二进制只执行一次 ldd，缓存供全部链接/运行时检查复用
@@ -234,7 +234,9 @@ _verify_build() {
 main() {
 incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     local jobs
-    local gcc_path gxx_path cuda_lib_dir=""
+    # cuda_lib_dir 无初始化：313 行的命令替换赋值是唯一写入点且必然执行
+    # （失败时赋空串并进 else），提前 ="" 是掩盖真实数据流的死代码
+    local gcc_path gxx_path cuda_lib_dir
     local -a cmake_extra_args
     while (($# > 0)); do
         case "$1" in
@@ -316,7 +318,8 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
         if command -v nvcc &>/dev/null; then
             llama_warn "无法自动检测 CUDA 库路径，构建可能失败"
         fi
-        cuda_lib_dir=""
+        # 命令替换失败时 cuda_lib_dir 已被赋为空串（检测函数无输出），
+        # 无需显式重置
     fi
 
     # --- 步骤 1：清理旧构建 --------------------------------------

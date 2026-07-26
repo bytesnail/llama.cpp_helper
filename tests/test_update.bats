@@ -218,23 +218,6 @@ load test_helper
     [ "$(git -C "$fake_repo" rev-parse HEAD)" = "$target_sha" ]
 }
 
-@test "_json_field extracts field from valid JSON" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
-
-    local test_json='{"tagName":"b4000","targetCommitish":"abc1234567890"}'
-    run _json_field "tagName" <<< "$test_json"
-    [ "$status" -eq 0 ]
-    [ "$output" = "b4000" ]
-}
-
-@test "_json_field returns non-zero on missing key" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
-
-    local test_json='{"tag_name":"b4000"}'
-    run _json_field "nonexistent_key" <<< "$test_json"
-    [ "$status" -ne 0 ]
-}
-
 @test "_session_capture_current captures empty branch when detached HEAD" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
@@ -655,10 +638,10 @@ _run_fetch_with_path() {
 @test "_fetch_latest_release prefers gh adapter when authenticated" {
     local mock_dir
     mock_dir=$(mktemp -d)
-    # gh stub：auth status 成功，release view 输出 JSON
+    # gh stub：release view 输出 JSON（seam 不再预检 gh auth status——
+    # 未认证时 release view 本身即失败并回退，预检是白付的一次 RTT）
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
-if [[ "$1" == "auth" ]]; then exit 0; fi
 printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
@@ -677,10 +660,9 @@ MOCK_EOF
 @test "_fetch_latest_release falls back to curl when gh query fails" {
     local mock_dir
     mock_dir=$(mktemp -d)
-    # gh stub：auth status 成功但 release view 失败
+    # gh stub：release view 失败
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
-if [[ "$1" == "auth" ]]; then exit 0; fi
 exit 1
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
@@ -694,10 +676,10 @@ MOCK_EOF
     rm -rf "${mock_dir}"
 }
 
-@test "_fetch_latest_release uses curl directly when gh is not authenticated" {
+@test "_fetch_latest_release falls back to curl when gh is not authenticated" {
     local mock_dir
     mock_dir=$(mktemp -d)
-    # gh stub：一切调用失败（auth status 非零 → seam 应直接走 curl）
+    # gh stub：一切调用失败（未认证时 release view 即失败 → seam 回退 curl）
     _make_stub_exec "${mock_dir}/gh" "exit 1"
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 200 '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}')"

@@ -218,12 +218,6 @@ _cleanup_stale_submodules() {
     fi
 }
 
-# Usage: _json_field <field_name>
-# 使用 Python 提取 JSON 字段。输入通过 stdin 管道传入。
-_json_field() {
-    python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"
-}
-
 # Usage: _parse_release_json <field1> [field2] ...
 # 单次 python3 调用提取多个 JSON 字段，TAB 分隔输出到一行。
 # 供两个 fetcher 复用：原实现每字段起一个 python3 进程（共 4 次 fork）。
@@ -265,7 +259,8 @@ _print_success_summary() {
         fi
     fi
     echo
-    llama_print_run_examples "${BUILD_BIN_DIR:-${LLAMA_CPP_SRC}/build/bin}"
+    # BUILD_BIN_DIR 由 config.sh 无条件定义（本脚本顶部恒 source），无回退
+    llama_print_run_examples "$BUILD_BIN_DIR"
 }
 
 # --- GitHub API 查询 -----------------------------------------
@@ -276,16 +271,17 @@ _print_success_summary() {
 # parsed=$(_fetch_latest_release) 捕获时不会混入日志。
 
 # Usage: _fetch_latest_release
-# 显式 seam：gh 已认证走 gh adapter（失败回退 curl），否则直接 curl adapter。
+# 显式 seam：gh 可用时先走 gh adapter（失败回退 curl），否则直接 curl adapter。
+# 不预检 gh auth status：未登录时 gh release view 同样失败并落入回退路径，
+# 预检不改变结果却多付一次完整 API RTT（实测约 0.8s）。
 _fetch_latest_release() {
-    if command -v gh &>/dev/null && gh auth status &>/dev/null; then
-        llama_info "使用 gh CLI 查询（已认证）" >&2
+    if command -v gh &>/dev/null; then
         if _fetch_latest_release_gh; then
             return 0
         fi
-        llama_warn "gh 查询失败，回退到 curl" >&2
+        llama_warn "gh 查询失败（未登录或网络问题），回退到 curl" >&2
     else
-        llama_warn "gh 未安装或未登录，使用 curl 直接访问 API" >&2
+        llama_warn "gh 未安装，使用 curl 直接访问 API" >&2
     fi
     _fetch_latest_release_curl
 }
@@ -506,10 +502,11 @@ _resolve_target() {
     _session_set_target "$rel_tag" "$rel_date"
 
     # 显示版本信息
-    # bash 子串对短字符串天然返回整串；空值显示 unknown
+    # bash 子串对短字符串天然返回整串；rel_commit 为空时 rel_short 亦为空，
+    # 但下方两个消费点（对应 Commit 详情行、"已是最新"提示）均以 rel_commit
+    # 非空为前提，空值不可达（原 :=unknown 默认值是死代码）
     local rel_short
     rel_short=$(_short_sha "$rel_commit")
-    : "${rel_short:=unknown}"
     llama_detail "目标版本:    ${release_tag}"
     if [[ -n "$rel_commit" ]] && llama_is_full_commit_sha "$rel_commit"; then
         llama_detail "对应 Commit: ${rel_short} (${rel_commit})"
@@ -613,12 +610,12 @@ _update_source() {
     # 原实现仅在 release_commit 为 40 位 SHA 时校验，用户指定 tag 与
     # gh 查询（targetCommitish 为分支名）两条主路径下校验均不生效
     if [[ "$actual_commit" != "$target_sha" ]]; then
-        llama_err "checkout commit (${actual_commit:0:7}) 与目标 (${target_sha:0:7}) 不一致"
+        llama_err "checkout commit ($(_short_sha "$actual_commit")) 与目标 ($(_short_sha "$target_sha")) 不一致"
         _rollback || true
         llama_die "版本切换校验失败"
     fi
 
-    llama_ok "源码已更新到 ${release_tag} (${actual_commit:0:7})"
+    llama_ok "源码已更新到 ${release_tag} ($(_short_sha "$actual_commit"))"
     # 清理旧版本遗留的子模块目录
     # || true：清理失败（索引不可读）保守不删除，不阻断更新主流程
     _cleanup_stale_submodules || true

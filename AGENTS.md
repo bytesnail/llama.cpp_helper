@@ -147,7 +147,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 1. **绝不直接执行** `config.sh` 或 `run_env.sh` — 它们有 source-only 守卫。`run_env.sh` 只能用 `source run_env.sh`
 2. **绝不在 source 脚本中无条件启用** `set -euo pipefail` — 会导致父 shell 退出
 3. **绝不删除锁文件** — `flock` 基于 inode，删除会导致等待进程锁住已删除 inode。`llama_release_lock` 只关 FD
-4. **绝不在 Python 中嵌入字段名** — 使用 `sys.argv[1]` 传递字段名避免 Python 注入（参考 `_json_field`）
+4. **绝不在 Python 中嵌入字段名** — 使用 `sys.argv` 传递字段名避免 Python 注入（参考 `_parse_release_json`）
 5. **source 脚本绝不污染父 shell 颜色变量** — 颜色变量名清单（`_LLAMA_COLOR_VARS`）在 `common.sh` 单一定义；`common.sh` 被 source 时先自动 `llama_save_colors` 保存父 shell 原值，`run_env.sh` 退出时由 `llama_restore_colors` 恢复（unset 与空串不做区分，恢复为空串）
 6. **绝不启用** `GGML_CUDA_ENABLE_UNIFIED_MEMORY` — 离散 GPU（RTX 2080 Ti）有害。仅集成 GPU 或 OOM 时手动启用
 7. **绝不在测试中修改生产环境的 llama.cpp 仓库** — 所有测试操作必须在 `tests/test_helper.bash` 创建的临时目录中进行。`_setup_tmpdir()` 自动创建 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它，`teardown` 时自动清理。测试需不同仓库时显式覆盖 `LLAMA_CPP_SRC`，但不得指向 `_LLAMA_PROJECT_ROOT/../llama.cpp`（生产路径）
@@ -167,7 +167,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 ## 注意事项
 
 - **Bash ≥ 4.2 是硬性要求**：`declare -A` 关联数组（`run_env.sh` 的 `declare -A`、`update.sh` 的 `local -A`）和 `[[ -v ]]` 变量测试（`common.sh`）。注：`update.sh` 的 `_cleanup_stale_submodules` 刻意用 `${arr[k]+x}` 而非 `[[ -v arr[k] ]]`，因为后者对关联数组元素需 Bash 4.3+
-- **测试范围**：覆盖 CLI 接口（`--help`/`--version`/参数解析）及可离线测试的内部函数（如 `_resolve_target`、`_rollback`、`_json_field`、硬件信息采集、`set -e` 管线防护回归等）。实际构建/更新行为（依赖真实 CUDA 工具链和 llama.cpp 源码的端到端流程）不在测试范围
+- **测试范围**：覆盖 CLI 接口（`--help`/`--version`/参数解析）及可离线测试的内部函数（如 `_resolve_target`、`_rollback`、`_parse_release_json`、硬件信息采集、`set -e` 管线防护回归等）。实际构建/更新行为（依赖真实 CUDA 工具链和 llama.cpp 源码的端到端流程）不在测试范围
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行
 - **临时补丁**：`build.sh` 的 CUDA RPATH 检测（`_detect_cuda_lib_dir` 周围，注释标记 `TODO(upstream)`）是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题），上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
