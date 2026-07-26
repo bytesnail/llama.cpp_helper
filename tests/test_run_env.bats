@@ -61,6 +61,30 @@ load test_helper
     [[ "$output" =~ "8x" ]]
 }
 
+@test "run_env.sh warns that GGML_CUDA_P2P=0 does not disable P2P" {
+    # 存在性语义：llama.cpp 仅检测变量是否存在（上游 getenv != nullptr，
+    # 已核实）——=0 不关闭，必须提示 unset，否则用户误以为已关闭
+    run bash -c "export GGML_CUDA_P2P=0; source '${BATS_TEST_DIRNAME}/../run_env.sh' 2>&1"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "保留用户值" ]]
+    [[ "$output" =~ "不会关闭" ]]
+    [[ "$output" =~ "unset" ]]
+}
+
+@test "source run_env.sh does not leak config.sh readonly vars or SCRIPT_DIR" {
+    # config.sh 改经子 shell 提取版本号：readonly 变量（REPO 等）不再灌入
+    # 父 shell（readonly 无法 unset，用户后续同名赋值会报"只读变量"）；
+    # SCRIPT_DIR 不再被覆写（不再需要 llama_init_script_dir）
+    run bash -c "
+        REPO=mine; SCRIPT_DIR=/opt/mine
+        source '${BATS_TEST_DIRNAME}/../run_env.sh' >/dev/null 2>&1
+        REPO=other
+        echo \"REPO=\$REPO SCRIPT_DIR=\$SCRIPT_DIR\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "REPO=other SCRIPT_DIR=/opt/mine" ]]
+}
+
 @test "run_env.sh --status does not set env vars" {
     run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' --status 2>/dev/null; echo P2P=\${GGML_CUDA_P2P:-unset}"
     [ "$status" -eq 0 ]
@@ -68,8 +92,10 @@ load test_helper
 }
 
 @test "run_env.sh rejects unknown flags with error" {
+    # 错误经消息传达；source 上下文退出码恒为 0——非零 return 是会杀死
+    # set -e 父 shell 的简单命令，与"不伤害父 shell"承诺相悖（实测复现）
     run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' --bogus"
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     [[ "$output" =~ "未知" ]]
 }
 

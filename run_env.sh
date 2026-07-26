@@ -36,29 +36,31 @@ if [[ ! -f "${boot_dir}/common.sh" ]]; then
 fi
 # shellcheck source=/dev/null
 source "${boot_dir}/common.sh"
-unset boot_dir
 
-# 共享辅助函数已可用 — 正确设置 SCRIPT_DIR
-llama_init_script_dir
-
-# source config.sh 获取版本信息（供 llama_show_version 使用）
-if [[ -f "${SCRIPT_DIR}/config.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${SCRIPT_DIR}/config.sh"
+# 版本号（供 llama_show_version 使用）经子 shell 提取：直接 source config.sh
+# 会把其 readonly 变量/数组（REPO/LOCK_FILE/LLAMA_CMAKE_KNOBS 等约 20 个）
+# 灌入父 shell——readonly 无法 unset，用户后续同名赋值直接报"只读变量"
+# （已实证）。同理本脚本不调用 llama_init_script_dir：不需要 SCRIPT_DIR，
+# 避免覆写父 shell 的同名变量（dotfiles 常用名）。
+if [[ -f "${boot_dir}/config.sh" ]]; then
+    LLAMA_HELPER_VERSION=$(bash -c 'source "$1/config.sh" 2>/dev/null; printf %s "${LLAMA_HELPER_VERSION:-unknown}"' _ "$boot_dir")
 fi
+unset boot_dir
 
 # --- 环境变量定义 --------------------------------------------
 # 使用关联数组定义所有要设置的环境变量
-# 格式：[变量名]="值|描述"
+# 格式：[变量名]="值|语义|描述"；语义 ∈ presence（llama.cpp 仅检测变量
+# 是否存在，关闭须 unset）| value（读取变量值）
 declare -A _LLAMA_RUN_ENV_VARS=(
-    ["GGML_CUDA_P2P"]="1|启用 GPU 间 P2P 直传（NVLink）"
-    ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
+    ["GGML_CUDA_P2P"]="1|presence|启用 GPU 间 P2P 直传（NVLink）——存在性语义：llama.cpp 仅检测变量是否存在，置 0 不关闭，关闭须 unset"
+    ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|value|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
 )
 
-# Usage: _env_var_value <name> / _env_var_desc <name>
-# "值|描述" 格式的统一解析点（_show_env_vars 与 main 设置循环共用）
-_env_var_value() { printf '%s' "${_LLAMA_RUN_ENV_VARS[$1]%|*}"; }
-_env_var_desc()  { printf '%s' "${_LLAMA_RUN_ENV_VARS[$1]#*|}"; }
+# Usage: _env_var_value <name> / _env_var_sem <name> / _env_var_desc <name>
+# "值|语义|描述" 格式的统一解析点（_show_env_vars 与 main 设置循环共用）
+_env_var_value() { printf '%s' "${_LLAMA_RUN_ENV_VARS[$1]%%|*}"; }
+_env_var_sem()   { local _rest="${_LLAMA_RUN_ENV_VARS[$1]#*|}"; printf '%s' "${_rest%%|*}"; }
+_env_var_desc()  { printf '%s' "${_LLAMA_RUN_ENV_VARS[$1]#*|*|}"; }
 
 # --- 帮助信息 ------------------------------------------------
 # Usage: _show_help
@@ -169,6 +171,15 @@ main() {
         # 检查是否已设置（允许用户预先覆盖）
         if [[ -n "${!var:-}" ]]; then
             llama_warn "${var} 已设置为 ${!var}，保留用户值"
+            # 存在性语义变量：llama.cpp 只检测变量是否存在——=0/=false
+            # 不会关闭该特性（上游 getenv(...) != nullptr，已核实）
+            if [[ "$(_env_var_sem "$var")" == "presence" ]]; then
+                case "${!var}" in
+                    0|false|FALSE|no|NO)
+                        llama_warn "${var}=${!var} 不会关闭该特性（llama.cpp 仅检测变量存在）；如需关闭请: unset ${var}"
+                        ;;
+                esac
+            fi
         else
             export "$var=$value"
             llama_ok "${var}=${value}"
@@ -196,4 +207,13 @@ main "$@" || _main_rc=$?
 
 llama_restore_colors
 
-llama_return_or_exit "$_main_rc"
+# 清理脚本级定义，不污染父 shell 命名空间（bash 函数无法局部化）
+unset -f main _show_help _show_env_vars _sorted_env_var_names \
+    _env_var_value _env_var_sem _env_var_desc
+unset _LLAMA_RUN_ENV_VARS
+
+# || true：source 上下文的非零 return 同样是会杀死 set -e 父 shell 的简单
+# 命令（直接执行已被文件头部拦截，此处必为 source 上下文）——错误只经
+# llama_err 与帮助文本传达，退出码不外传（实测：此前 --bogus 在 set -e
+# 父 shell 中照样致命，与上方 || 捕获的承诺相悖）
+llama_return_or_exit "$_main_rc" || true
