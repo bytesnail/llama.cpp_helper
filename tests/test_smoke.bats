@@ -161,11 +161,14 @@ load test_helper
 
 @test "update.sh session state: exactly 7 globals, each initialized once at script level" {
     # C4 契约：会话全局从 15 个收敛到 7 个——脚本级（顶格）赋值仅为状态节
-    # 初始化，每个变量恰好一次；过程式写入全部收敛在具名入口内
-    local count
-    count=$(grep -cE '^(current_commit|current_tag|current_branch|release_tag|release_date|need_source_update|skip_update)=' \
-        "${BATS_TEST_DIRNAME}/../update.sh")
-    [ "$count" -eq 7 ]
+    # 初始化，每个变量恰好一次；过程式写入全部收敛在具名入口内。
+    # 逐变量钉"恰好一次"：只数总数时，某变量初始化两次+另一变量漏初始化
+    # 仍得 7，会假绿
+    local v count
+    for v in current_commit current_tag current_branch release_tag release_date need_source_update skip_update; do
+        count=$(grep -cE "^${v}=" "${BATS_TEST_DIRNAME}/../update.sh")
+        [ "$count" -eq 1 ] || { echo "${v}: 脚本级初始化 ${count} 次（期望恰好 1 次）"; return 1; }
+    done
 }
 
 @test "update.sh derived/localized state names no longer exist" {
@@ -181,14 +184,17 @@ load test_helper
     # C4 契约：缩进（函数体内）的会话全局赋值只允许出现在各自的具名入口：
     #   release_tag/release_date      → _session_set_target
     #   current_commit/current_tag/current_branch → _session_capture_current
-    # awk 状态机：进入允许函数置 in_ok，行首 } 退出；函数体外的违规赋值即失败
+    #   need_source_update/skip_update → _resolve_target
+    # awk 状态机：进入允许函数置标志位，行首 } 退出；函数体外的违规赋值即失败
     local violations
     violations=$(awk '
-        /^_session_set_target\(\)/   { in_target=1; next }
+        /^_session_set_target\(\)/    { in_target=1; next }
         /^_session_capture_current\(\)/ { in_current=1; next }
-        /^}/                          { in_target=0; in_current=0; next }
+        /^_resolve_target\(\)/        { in_resolve=1; next }
+        /^}/                          { in_target=0; in_current=0; in_resolve=0; next }
         /^[[:space:]]+(release_tag|release_date)=/ && !in_target   { print "release_* outside _session_set_target: line " NR }
         /^[[:space:]]+current_(commit|tag|branch)=/ && !in_current { print "current_* outside _session_capture_current: line " NR }
+        /^[[:space:]]+(need_source_update|skip_update)=/ && !in_resolve { print "need_source_update/skip_update outside _resolve_target: line " NR }
     ' "${BATS_TEST_DIRNAME}/../update.sh")
     [ -z "$violations" ] || { echo "$violations"; return 1; }
 }

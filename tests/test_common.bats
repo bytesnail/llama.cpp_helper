@@ -910,9 +910,18 @@ CONDAEOF
 }
 
 @test "llama_hw_cpu_cores_physical does not exceed logical" {
-    local phys log
+    # physical 来自 lscpu 硬件拓扑（cpuset 无关），logical 来自 nproc
+    # （cpuset 感知）——cpuset 受限环境（容器 --cpuset-cpus、cgroup）中
+    # nproc < 硬件线程数，phys <= log 必然不成立但生产行为正确：检测后跳过
+    local phys log cpuinfo_count
     phys=$(llama_hw_cpu_cores_physical)
     log=$(llama_hw_cpu_cores_logical)
+    if ((phys > log)); then
+        cpuinfo_count=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 0)
+        if ((cpuinfo_count > log)); then
+            skip "cpuset 受限环境：nproc=${log} < 硬件线程=${cpuinfo_count}，断言无意义"
+        fi
+    fi
     [ "$phys" -le "$log" ]
 }
 

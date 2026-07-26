@@ -569,13 +569,20 @@ INNER_EOF
         echo '_fetch_latest_release_curl'
     } > "$inner"
 
+    # 隔离 TMPDIR 再运行：下方「临时文件已清理」断言的 glob 扫全局 /tmp 时，
+    # 并发测试套件或用户真实 update.sh 运行遗留的 llama_release.*.json 会
+    # 造成假失败（flake）
+    local isolated_tmp="${TEST_TMPDIR}/isolated_tmp"
+    mkdir -p "$isolated_tmp"
+    export TMPDIR="$isolated_tmp"
+
     run bash "$inner"
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
 
     # 验证临时文件已清理（实现为每条退出路径显式 rm -f，非 RETURN trap——
     # bash RETURN trap 会全局泄漏，见 update.sh 中该决策的注释）
-    ! ls "${TMPDIR:-/tmp}/llama_release."*.json 2>/dev/null
+    ! ls "$isolated_tmp"/llama_release.*.json 2>/dev/null
 
     rm -rf "${mock_dir}"
 }
