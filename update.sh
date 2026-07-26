@@ -304,8 +304,9 @@ _fetch_latest_release_curl() {
 # 调用者变量，printf -v 曾会写到函数自己的 local 上（同 C1 的 _lrs_ 教训）
 _parse_args() {
     local _pa_result_var="${1:-}"
-    if [[ ! "$_pa_result_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ || "$_pa_result_var" == _pa_* ]]; then
-        llama_err "_parse_args: 非法结果变量名: ${_pa_result_var:-<缺失>}"
+    if [[ ! "$_pa_result_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ || "$_pa_result_var" == _pa_* ]] \
+        || llama_out_var_denylisted "$_pa_result_var"; then
+        llama_err "_parse_args: 非法或保留的结果变量名: ${_pa_result_var:-<缺失>}"
         return 2
     fi
     shift

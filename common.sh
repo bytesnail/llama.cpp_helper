@@ -761,6 +761,26 @@ llama_die() {
     llama_safe_exit "$code"
 }
 
+# out-param（printf -v 写回）接口的保留变量名单：覆写这些变量会破坏
+# shell 自身行为（PATH 被改写后全部外部命令 lookup 失败——已实证）或
+# 直接报错（UID/SHELLOPTS 等 readonly）。llama_run_silent 与 _parse_args
+# 等 out-param 接口在形态校验之外必须过此名单。
+# declare -ar 是 Bash 中声明只读数组的唯一方式（readonly 无法作用于数组）
+declare -ar _LLAMA_OUT_VAR_DENY=(
+    PATH IFS HOME PWD OLDPWD SHELL TERM LANG LC_ALL LC_CTYPE PS1 PS2
+    BASH_SOURCE FUNCNAME BASHPID BASHOPTS SHELLOPTS
+    UID EUID PPID GROUPS RANDOM SECONDS LINENO DIRSTACK PIPESTATUS
+)
+# Usage: llama_out_var_denylisted <name>
+# <name> 在 out-param 保留名单（_LLAMA_OUT_VAR_DENY）中时返回 0，否则返回 1。
+llama_out_var_denylisted() {
+    local name="$1" denied
+    for denied in "${_LLAMA_OUT_VAR_DENY[@]}"; do
+        [[ "$name" == "$denied" ]] && return 0
+    done
+    return 1
+}
+
 # Usage: llama_safe_exit [exit_code]
 llama_safe_exit() {
     local code="${1:-0}"
@@ -855,8 +875,9 @@ llama_print_run_examples() {
 # 使碰撞在结构上不可能。
 llama_run_silent() {
     local _lrs_rc_var="${1:-}"
-    if [[ ! "$_lrs_rc_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ || "$_lrs_rc_var" == _lrs_* ]]; then
-        llama_err "llama_run_silent: 无效或保留的输出变量名: ${_lrs_rc_var:-<空>}（_lrs_ 前缀为实现保留）"
+    if [[ ! "$_lrs_rc_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ || "$_lrs_rc_var" == _lrs_* ]] \
+        || llama_out_var_denylisted "$_lrs_rc_var"; then
+        llama_err "llama_run_silent: 无效或保留的输出变量名: ${_lrs_rc_var:-<空>}（_lrs_ 前缀与 shell 关键变量名为实现保留）"
         return 2
     fi
     shift

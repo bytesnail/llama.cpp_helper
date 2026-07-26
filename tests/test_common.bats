@@ -386,6 +386,30 @@ teardown() {
     [[ "$output" =~ "缺少命令" ]]
 }
 
+@test "llama_run_silent rejects shell-critical out-var names" {
+    # PATH/IFS 等 shell 关键变量被 printf -v 覆写会破坏 shell 自身行为
+    # （实测：PATH 被写为 "0" 后全部外部命令 lookup 失败）——按误用返回 2
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent PATH true
+    "
+    [ "$status" -eq 2 ]
+    [[ "$output" =~ "变量名" ]]
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent IFS true
+    "
+    [ "$status" -eq 2 ]
+    [[ "$output" =~ "变量名" ]]
+    # 黑名单外的普通变量名不受影响
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        llama_run_silent rc true; echo \"rc=\$rc\"
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "rc=0" ]]
+}
+
 @test "llama_run_silent always writes out-var on failure (set -u read safe)" {
     run bash -c "
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
