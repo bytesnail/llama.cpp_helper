@@ -120,6 +120,39 @@ load test_helper
     [[ ! -d "${fake_repo}/.git/modules/old_sub" ]]
 }
 
+@test "_cleanup_stale_submodules spares untracked git worktrees" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    # 树内未跟踪 worktree：.git 文件的 gitdir 指向 .git/worktrees/，
+    # 不是子模块残留——预检查（--untracked-files=no）显式放行的
+    # 未跟踪内容，清理不得删除（此前被误判为残留 rm -rf，已实证）
+    local fake_repo="${TEST_TMPDIR}/wt_repo"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    git -C "$fake_repo" worktree add -q "${fake_repo}/user_work" 2>/dev/null
+    echo "uncommitted work" > "${fake_repo}/user_work/important.txt"
+
+    LLAMA_CPP_SRC="$fake_repo" run _cleanup_stale_submodules
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"清理旧子模块"* ]]
+    [[ -f "${fake_repo}/user_work/important.txt" ]]
+}
+
+@test "_cleanup_stale_submodules refuses to delete when git index unreadable" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    # 非 git 目录 + 伪造 gitdir 子模块：ls-files 失败时白名单构建必须
+    # 失败并保守不删除（此前进程替换吞错→空白名单→全部误判为残留）
+    local fake_repo="${TEST_TMPDIR}/not_a_repo"
+    mkdir -p "${fake_repo}/sub"
+    echo 'gitdir: ../.git/modules/sub' > "${fake_repo}/sub/.git"
+
+    LLAMA_CPP_SRC="$fake_repo" run _cleanup_stale_submodules
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "保守不删除" ]]
+    [[ -f "${fake_repo}/sub/.git" ]]
+}
+
 # --- C3：无 cwd 环境契约（所有 git 调用显式 -C）---
 
 @test "_check_local_repo does not change the caller's working directory" {

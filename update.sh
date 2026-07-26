@@ -96,8 +96,9 @@ _rollback() {
         failed=1
     fi
     # 清理回滚后可能出现的旧子模块残留
+    # || true：清理失败（索引不可读）保守不删除，不阻断回滚主流程
     if [[ "$failed" -eq 0 ]]; then
-        _cleanup_stale_submodules
+        _cleanup_stale_submodules || true
     fi
     if ! git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null; then
         llama_warn "子模块回滚不完全，可能需要手动处理"
@@ -134,18 +135,37 @@ _cleanup_on_interrupt() {
 }
 
 # Usage: _cleanup_stale_submodules
+# 清理"旧版本遗留"的子模块目录。安全契约（任一不满足即跳过，保守不删除）：
+#   1. 白名单必须成功构建——git ls-files 失败时 return 1，绝不按空白名单删除
+#   2. gitdir 指针必须指向 .git/modules/——worktree 的 .git 文件指向
+#      .git/worktrees/，未跟踪的用户 worktree 不是子模块残留（未跟踪文件
+#      经 _check_local_repo 的 --untracked-files=no 显式放行，清理不得删除）
 _cleanup_stale_submodules() {
     local -A expected_paths
     local path
     # ls-files --stage 的路径段以 TAB 分隔：必须用 TAB 切分提取完整路径。
     # 原 awk '{print $NF}' 按空白分词，含空格的子模块路径被截断后
     # 查不到 expected_paths，合法子模块会被误判为残留并 rm -rf（已实证）
+    # core.quotePath=false：非 ASCII 路径默认被 C 引用转义（如 "vendor/中文"），
+    # 与 find 输出的原始路径永不匹配，同样会把合法子模块误判为残留（已实证）
+    # 先落变量再查退出码：进程替换的失败不传播（set -e/pipefail 均不可见），
+    # 静默空表会把全部子模块误判为残留（已实证）
+    local ls_files_out
+    if ! ls_files_out=$(git -C "$LLAMA_CPP_SRC" -c core.quotePath=false ls-files --stage 2>/dev/null); then
+        llama_warn "无法读取 Git 索引（ls-files 失败），跳过子模块残留清理（保守不删除）"
+        return 1
+    fi
     while IFS= read -r path; do
         expected_paths["$path"]=1
-    done < <(git -C "$LLAMA_CPP_SRC" ls-files --stage | sed -n 's/^160000 [0-9a-fA-F]\{40\} [0-9]\t//p')
+    done < <(sed -n 's/^160000 [0-9a-fA-F]\{40\} [0-9]\t//p' <<< "$ls_files_out")
 
     local stale_count=0
     local gitlink mod_dir
+    # 不深入当前子模块内部：顶层 gitlinks 之外的嵌套子模块 .git 会被误判为残留
+    local -a find_prune_args=()
+    for path in "${!expected_paths[@]}"; do
+        find_prune_args+=(-path "${LLAMA_CPP_SRC}/${path}" -prune -o)
+    done
     while IFS= read -r gitlink; do
         gitlink="${gitlink#"${LLAMA_CPP_SRC}"/}"
         mod_dir="$(dirname "$gitlink")"
@@ -155,18 +175,25 @@ _cleanup_stale_submodules() {
         if [[ -n "${expected_paths[$mod_dir]+x}" ]]; then
             continue
         fi
-        if grep -q '^gitdir:' "${LLAMA_CPP_SRC}/${gitlink}" 2>/dev/null; then
-            llama_info "清理旧子模块残留: ${mod_dir}"
-            # shellcheck disable=SC2115
-            rm -rf "${LLAMA_CPP_SRC}/${gitlink}" "${LLAMA_CPP_SRC}/${mod_dir}"
-            local git_modules_dir="${LLAMA_CPP_SRC}/.git/modules/${mod_dir}"
-            if [[ -d "$git_modules_dir" ]]; then
-                rm -rf "$git_modules_dir"
-                llama_detail "清理 .git/modules: ${mod_dir}"
-            fi
-            ((stale_count++)) || true  # || true：set -e 下 ((0)) 退出码为 1
+        local gitdir_target
+        gitdir_target=$(sed -n 's/^gitdir: //p' "${LLAMA_CPP_SRC}/${gitlink}" 2>/dev/null || true)
+        case "$gitdir_target" in
+            */.git/modules/*) ;;
+            *) continue ;;  # 非子模块 gitdir（worktree/空文件等）——不删除
+        esac
+        llama_info "清理旧子模块残留: ${mod_dir}"
+        # shellcheck disable=SC2115
+        rm -rf "${LLAMA_CPP_SRC}/${gitlink}" "${LLAMA_CPP_SRC}/${mod_dir}"
+        local git_modules_dir="${LLAMA_CPP_SRC}/.git/modules/${mod_dir}"
+        if [[ -d "$git_modules_dir" ]]; then
+            rm -rf "$git_modules_dir"
+            llama_detail "清理 .git/modules: ${mod_dir}"
         fi
-    done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o -path "${LLAMA_CPP_SRC}/.git" -prune -o -type f -name '.git' -print)
+        ((stale_count++)) || true  # || true：set -e 下 ((0)) 退出码为 1
+    done < <(find "$LLAMA_CPP_SRC" -path "${LLAMA_CPP_SRC}/build" -prune -o \
+                -path "${LLAMA_CPP_SRC}/.git" -prune -o \
+                ${find_prune_args[@]+"${find_prune_args[@]}"} \
+                -type f -name '.git' -print)
 
     if [[ "$stale_count" -gt 0 ]]; then
         llama_ok "旧子模块清理完成 (${stale_count} 个)"
@@ -538,7 +565,8 @@ _update_source() {
 
     llama_ok "源码已更新到 ${release_tag} (${actual_commit:0:7})"
     # 清理旧版本遗留的子模块目录
-    _cleanup_stale_submodules
+    # || true：清理失败（索引不可读）保守不删除，不阻断更新主流程
+    _cleanup_stale_submodules || true
 
     # 同步当前版本的子模块
     llama_info "同步子模块..."
