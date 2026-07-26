@@ -249,9 +249,11 @@ readonly _LLAMA_HW_CPU_FLAGS_BASIC=(
     "sse4_2:SSE4.2" "avx:AVX" "avx2:AVX2" "fma:FMA" "f16c:F16C" "bmi2:BMI2" "avx_vnni:AVX-VNNI"
 )
 # shellcheck disable=SC2034
+# flag 名须与 /proc/cpuinfo 严格一致（Linux 内核 cpufeatures.h）：
+# vnni/bf16/fp16 带下划线（avx512_vnni 等），vbmi 无下划线——拼错会永不命中
 readonly _LLAMA_HW_CPU_FLAGS_AVX512=(
     "avx512f:F" "avx512cd:CD" "avx512bw:BW" "avx512dq:DQ" "avx512vl:VL"
-    "avx512vbmi:VBMI" "avx512vnni:VNNI" "avx512bf16:BF16" "avx512fp16:FP16"
+    "avx512vbmi:VBMI" "avx512_vnni:VNNI" "avx512_bf16:BF16" "avx512_fp16:FP16"
 )
 
 # Usage: llama_hw_cpu_flags
@@ -335,10 +337,19 @@ llama_print_hardware_summary() {
     # --- GPU + NVLink 互联 ---
     # 单次 nvidia-smi 查询同时得到数量与详情：nvidia-smi 每次启动需 50-150ms
     # （驱动初始化），先计数再查详情的两段式会重复付出该开销。
+    # command -v 只验证二进制存在；执行失败（驱动/NVML 不匹配）必须区分于
+    # "无 GPU"——进程替换的失败不可见，曾把驱动故障谎报为"未检测到 NVIDIA GPU"
     local gpu_lines=()
     if command -v nvidia-smi &>/dev/null; then
-        mapfile -t gpu_lines < <(nvidia-smi --query-gpu=index,name,compute_cap,memory.total \
-                                 --format=csv,noheader,nounits 2>/dev/null | sed 's/, /|/g')
+        local smi_out smi_rc=0
+        smi_out=$(nvidia-smi --query-gpu=index,name,compute_cap,memory.total \
+                            --format=csv,noheader,nounits 2>/dev/null) || smi_rc=$?
+        if [[ "$smi_rc" -ne 0 ]]; then
+            llama_warn "nvidia-smi 存在但执行失败（退出码: ${smi_rc}）——驱动异常？GPU 信息不可用"
+        else
+            # 参数扩展替代 sed（csv 的 ", " → 字段分隔符 "|"）
+            mapfile -t gpu_lines <<< "${smi_out//, /|}"
+        fi
     fi
     local gpu_count=${#gpu_lines[@]}
     if ((gpu_count > 0)); then
@@ -811,7 +822,10 @@ llama_init_script_dir() {
     # 已有的同名 SCRIPT_DIR（dotfiles 常用名）。不 export——source 场景
     # （run_env.sh）下赋值在当前 shell 天然可见，export 会泄漏进父 shell。
     local caller="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
-    SCRIPT_DIR="$(cd "$(dirname "$caller")" >/dev/null && pwd)"
+    if ! SCRIPT_DIR="$(cd "$(dirname "$caller")" >/dev/null && pwd)"; then
+        llama_err "无法解析脚本目录: ${caller}"
+        return 1
+    fi
 }
 
 # 帮助文本标签遵循文件顶部定义的语言策略。
