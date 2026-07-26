@@ -189,6 +189,35 @@ load test_helper
     [[ "$output" =~ "源码已更新到 b4000" ]]
 }
 
+@test "_update_source accepts a short commit SHA (7-40 hex)" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    # 短 SHA（非 tag、非 40 位）此前被 llama_is_full_commit_sha 挡在
+    # 通用 rev 解析之外，die"本地找不到目标版本"——与 help 文案
+    # "更新到指定 commit"不符
+    local fake_repo="${TEST_TMPDIR}/src_repo"
+    local origin_repo="${TEST_TMPDIR}/origin.git"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    git -C "$fake_repo" commit --allow-empty -q -m "second"
+    local short_sha target_sha
+    short_sha=$(git -C "$fake_repo" rev-parse --short=7 HEAD)
+    target_sha=$(git -C "$fake_repo" rev-parse HEAD)
+    git clone -q --bare "$fake_repo" "$origin_repo"
+    git -C "$fake_repo" remote add origin "$origin_repo"
+    # 回到首个 commit，使短 SHA 目标确实需要切换
+    git -C "$fake_repo" checkout -q HEAD~1
+
+    LLAMA_CPP_SRC="$fake_repo"
+    _session_capture_current
+    _session_set_target "$short_sha" ""
+
+    run _update_source
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "源码已更新到 ${short_sha}" ]]
+    [ "$(git -C "$fake_repo" rev-parse HEAD)" = "$target_sha" ]
+}
+
 @test "_json_field extracts field from valid JSON" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 

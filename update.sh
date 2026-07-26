@@ -46,8 +46,8 @@ _show_help() {
         "  -h, --help      显示此帮助信息
       --version   显示版本信息" \
         "  bash update.sh                    # 更新到最新 release
-  bash update.sh b3631              # 更新到指定 commit
   bash update.sh b8941              # 更新到指定标签
+  bash update.sh 1a2b3c4            # 更新到指定 commit（7-40 位 SHA）
   bash update.sh --help             # 显示帮助"
 }
 
@@ -564,8 +564,12 @@ _update_source() {
         target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null || true)
     fi
 
-    # 用户指定的可能是裸 commit SHA（无对应标签）：回退按 rev 解析
-    if [[ -z "$target_sha" ]] && llama_is_full_commit_sha "$release_tag"; then
+    # 用户指定的可能是裸 commit SHA（无对应标签）：回退按 rev 解析。
+    # 接受 7-40 位 hex（短 SHA 与完整 SHA；refs/tags 解析在前，同名的
+    # 纯 hex tag 优先按 tag 处理）。分支名等其他 commitish 不在此列——
+    # 与 llama_is_full_commit_sha 的 40 位门槛相比，7 位下限与
+    # _resolve_target 版本对比的 ${#rel_commit} -ge 7 一致
+    if [[ -z "$target_sha" ]] && [[ "$release_tag" =~ ^[a-fA-F0-9]{7,40}$ ]]; then
         target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "${release_tag}^{commit}" 2>/dev/null || true)
     fi
 
