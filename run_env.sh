@@ -212,8 +212,18 @@ unset -f main _show_help _show_env_vars _sorted_env_var_names \
     _env_var_value _env_var_sem _env_var_desc
 unset _LLAMA_RUN_ENV_VARS
 
+# _main_rc 也要清除（实测曾残留父 shell）——但 llama_return_or_exit 仍需它，
+# 经参数传入收尾函数后在函数内 unset（函数内 unset 无同名 local 时作用于
+# 全局）；BASH_SOURCE 判断不受影响：llama_return_or_exit 的调用者仍是
+# 本文件（source 上下文），与原顶层直调语义一致
+_llama_run_env_finalize() {
+    local _rc="$1"
+    unset _main_rc
+    unset -f _llama_run_env_finalize
+    llama_return_or_exit "$_rc"
+}
 # || true：source 上下文的非零 return 同样是会杀死 set -e 父 shell 的简单
 # 命令（直接执行已被文件头部拦截，此处必为 source 上下文）——错误只经
 # llama_err 与帮助文本传达，退出码不外传（实测：此前 --bogus 在 set -e
 # 父 shell 中照样致命，与上方 || 捕获的承诺相悖）
-llama_return_or_exit "$_main_rc" || true
+_llama_run_env_finalize "$_main_rc" || true

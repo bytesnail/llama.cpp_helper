@@ -105,6 +105,21 @@ load test_helper
     [[ "$output" == *"SOURCED_TWICE"* ]]
 }
 
+@test "source run_env.sh does not leak _main_rc or finalize helper" {
+    # 回归测试：脚本级 _main_rc 曾残留父 shell（实测 _main_rc=0 泄漏）——
+    # 收尾函数经参数接收后 unset；finalize 函数自身也随调用自卸载
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../run_env.sh' >/dev/null 2>&1
+        declare -p _main_rc >/dev/null 2>&1 && echo LEAK_RC
+        declare -f _llama_run_env_finalize >/dev/null 2>&1 && echo LEAK_FN
+        declare -f main >/dev/null 2>&1 && echo LEAK_MAIN
+        echo DONE
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"DONE"* ]]
+    [[ "$output" != *"LEAK"* ]]
+}
+
 @test "source run_env.sh cleans up color variables (no parent shell pollution)" {
     # 颜色变量由 common.sh 单一来源管理（_LLAMA_COLOR_VARS）；source 时自动
     # 保存父 shell 原值，退出时 llama_restore_colors 恢复。父 shell 原本无
