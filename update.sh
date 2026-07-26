@@ -100,7 +100,12 @@ _rollback() {
     if [[ "$failed" -eq 0 ]]; then
         _cleanup_stale_submodules || true
     fi
-    if ! git -C "$LLAMA_CPP_SRC" submodule update --recursive --quiet 2>/dev/null; then
+    # --init 与 _update_source 对齐：回滚目标可能含从未初始化的子模块，
+    # plain update 对未初始化子模块静默跳过且退出 0（已实证）——会谎报
+    # "已回滚"成功。低速保护与 fetch 一致（网络克隆子模块时防半挂起）
+    if ! env GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT}" \
+            GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME}" \
+            git -C "$LLAMA_CPP_SRC" submodule update --init --recursive --quiet 2>/dev/null; then
         llama_warn "子模块回滚不完全，可能需要手动处理"
         failed=1
     fi
@@ -401,7 +406,16 @@ _check_local_repo() {
     LLAMA_CPP_SRC="$abs_src"
     # --untracked-files=no：未跟踪文件（补丁/笔记/core dump）不会被 checkout
     # 触碰（git 自身也会拒绝覆盖），不应以"未提交的更改"为由阻断更新
-    if [[ -n "$(git -C "$LLAMA_CPP_SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    # git 失败必须 fail-closed：2>/dev/null 吞掉错误后空输出与"工作区干净"
+    # 不可区分（此前 index 损坏/权限问题会静默跳过本守卫，与
+    # llama_check_build_health 的 fail-closed 策略不一致——已实证）
+    local porcelain
+    if ! porcelain=$(git -C "$LLAMA_CPP_SRC" status --porcelain --untracked-files=no 2>&1); then
+        llama_err "无法读取 Git 仓库状态（status 命令失败）:"
+        llama_detail "$porcelain"
+        llama_die "仓库状态检查失败，请先修复 Git 仓库"
+    fi
+    if [[ -n "$porcelain" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
         git -C "$LLAMA_CPP_SRC" status --short --untracked-files=no
         llama_die "存在未提交的更改，请先处理后再更新"
@@ -411,8 +425,20 @@ _check_local_repo() {
     # 先完整收集输出再 grep：直接 foreach | grep -q 时，grep -q 提前退出
     # 会让 foreach 收到 SIGPIPE(141)，pipefail 下管线返回 141 → if 条件
     # 为假 → 多个子模块且靠前为脏时脏检查被静默跳过（已实证）
-    local submodule_status
-    submodule_status=$(git -C "$LLAMA_CPP_SRC" submodule foreach --quiet 'git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo DIRTY' 2>/dev/null || true)
+    # 内层区分退出码：diff --quiet 的 1（有差异）与 >1（错误，如 index
+    # 损坏/dubious ownership）不可混为一谈——后者曾一律误报 DIRTY，
+    # 用户按指引查 status 却看不到任何改动（已实证）。
+    # 内层脚本保持与外层 git -C 同行：test_smoke 的 -C 契约按行检查，
+    # foreach 内层裸调用（cwd 由 foreach 自身提供）靠同行放行
+    local submodule_status foreach_rc=0
+    submodule_status=$(git -C "$LLAMA_CPP_SRC" submodule foreach --quiet 'git diff --quiet 2>/dev/null; rc1=$?; git diff --cached --quiet 2>/dev/null; rc2=$?; if (( rc1 > 1 || rc2 > 1 )); then echo ERROR; elif (( rc1 != 0 || rc2 != 0 )); then echo DIRTY; fi' 2>/dev/null) || foreach_rc=$?
+    # foreach 自身失败（子模块 gitdir 损坏等）同样按检查失败处理——
+    # 外层 || true 曾把该失败整体吞掉，脏检查静默通过（已实证）
+    if [[ "$foreach_rc" -ne 0 ]] || grep -q 'ERROR' <<< "$submodule_status"; then
+        llama_err "无法读取子模块状态（Git 错误，非未提交的更改）:"
+        git -C "$LLAMA_CPP_SRC" submodule foreach 'git status' 2>&1 || true
+        llama_die "子模块状态检查失败，请先修复子模块仓库"
+    fi
     if grep -q 'DIRTY' <<< "$submodule_status"; then
         llama_err "子模块中存在未提交的更改，请先处理后再更新:"
         git -C "$LLAMA_CPP_SRC" submodule foreach 'git status --short' 2>/dev/null || true
@@ -532,7 +558,9 @@ _update_source() {
     local target_sha
     if ! target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null); then
         llama_detail "本地未找到标签 ${release_tag}，尝试精确拉取..."
-        git -C "$LLAMA_CPP_SRC" fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" 2>/dev/null || true
+        env GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT}" \
+            GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME}" \
+            git -C "$LLAMA_CPP_SRC" fetch origin --quiet "refs/tags/${release_tag}:refs/tags/${release_tag}" 2>/dev/null || true
         target_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "refs/tags/${release_tag}^{commit}" 2>/dev/null || true)
     fi
 
@@ -577,10 +605,12 @@ _update_source() {
     # || true：清理失败（索引不可读）保守不删除，不阻断更新主流程
     _cleanup_stale_submodules || true
 
-    # 同步当前版本的子模块
+    # 同步当前版本的子模块（低速保护与 fetch 一致：网络克隆时防半挂起持锁）
     llama_info "同步子模块..."
     if [[ -f "${LLAMA_CPP_SRC}/.gitmodules" ]]; then
-        if ! git -C "$LLAMA_CPP_SRC" submodule update --init --recursive --quiet; then
+        if ! env GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT}" \
+                GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME}" \
+                git -C "$LLAMA_CPP_SRC" submodule update --init --recursive --quiet; then
             llama_err "子模块同步失败"
             # || true：_rollback 部分失败返回 1 时 set -e 会中止脚本，
             # 导致下方 die 的诊断消息无法输出（退出码由 die 保证）
