@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（173 项）
+make test           # bats-core 测试套件（191 项）
 
 # 运行单个测试文件
 bats tests/test_common.bats
@@ -87,7 +87,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 | 需求 | 位置 | 备注 |
 |------|------|------|
 | 修改构建逻辑 | `build.sh` → `main()` | main() 包含参数解析和全部构建逻辑 |
-| 修改更新逻辑 | `update.sh` → `_update_source()` / `_build_with_rollback()` | 查询 → 切换 → 构建 → 回滚链路 |
+| 修改更新逻辑 | `update.sh` → `_resolve_target()` / `_update_source()` / `_build_with_rollback()` | 决策 → 切换 → 构建 → 回滚链路 |
 | 添加新工具函数 | `common.sh` | 遵循 `llama_` 公开 / `_` 私有两级命名 |
 | 修改配置默认值 | `config.sh` | 所有变量用 `${VAR:-default}` 模式 |
 | 添加/删除构建旋钮 | `config.sh` → `LLAMA_CMAKE_KNOBS` | 定义变量 + 登记旋钮表；`build.sh` 循环生成 `-D`，无需改动 |
@@ -114,7 +114,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 其他跨模块变量例外：
 - `incremental`、`_CLEANUP_DONE` 和 `_BUILD_TOUCHED`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。
 - `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
-- `update.sh` 的更新流程状态变量（`release_tag`、`release_commit`、`release_date`、`release_url`、`release_short`、`current_commit`、`current_short`、`current_tag`、`current_branch`、`target_version`、`need_source_update`、`skip_update`、`actual_commit`、`actual_tag`）：由 `_save_state`/`_parse_args`/`_resolve_target`/`_update_source` 设置，`_rollback`/`_build_with_rollback`/`main` 等跨函数读取，与上述性质相同，故同样使用 `lowercase_snake_case` 脚本级变量。
+- `update.sh` 的更新会话状态 7 个脚本级全局（`current_commit`、`current_tag`、`current_branch`、`release_tag`、`release_date`、`need_source_update`、`skip_update`）：写入面已收敛为 3 个具名入口——`_session_capture_current`（从 git 捕获更新前状态）、`_session_set_target`（记录目标版本）、`_resolve_target`（更新决策，两态显式写保证可重入）；跨函数读取的性质不变，故仍用 `lowercase_snake_case` 脚本级变量。短 SHA 由 `_short_sha` 现算（derive-don't-store，原 `current_short`/`release_short` 已消除），其余函数间数据经参数/返回值传递（`target_version` 是 `main` 局部，经 `_parse_args` out-param 与 `_resolve_target` 参数传递；release 查询经 `_fetch_latest_release` seam 返回 TAB 行）。写入面不变量由 `tests/test_smoke.bats` 三个契约测试钉住（顶格赋值清单、已消除名字消失、函数体外无会话全局赋值）。
 
 ## 日志规范
 

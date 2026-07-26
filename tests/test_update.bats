@@ -53,16 +53,15 @@ load test_helper
     [[ "$output" =~ "版本切换失败" || "$output" =~ "本地找不到目标版本" || "$output" =~ "拉取失败" || "$status" -ne 0 ]]
 }
 
-@test "_save_state sets current_branch after sourcing" {
+@test "_session_capture_current sets current_branch after sourcing" {
     # test_helper 已在 LLAMA_CPP_SRC 建好最小 git 仓库
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
     git -C "${fake_repo}" checkout -q -b test-branch
 
-    # Source update.sh in test-only mode to load _save_state
+    # Source update.sh in test-only mode to load _session_capture_current
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
     LLAMA_CPP_SRC="${fake_repo}"
-    current_commit=""; current_short=""; current_tag=""; current_branch=""
-    _save_state
+    _session_capture_current
     [ "$current_branch" = "test-branch" ]
 }
 
@@ -71,12 +70,9 @@ load test_helper
 
     # SCRIPT_DIR 已由 update.sh 顶层设置（readonly），llama_print_run_examples 直接使用
 
-    current_short="abc1234"
-    release_tag="b4000"
-    current_tag="(旧标签)"
     run _print_success_summary 1 "旧版" "b4000" "2026-01-01"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"abc1234"* || "$output" == *"旧版"* ]]
+    [[ "$output" == *"旧版"* ]]
     [[ "$output" == *"b4000"* ]]
 }
 
@@ -151,9 +147,9 @@ load test_helper
     # git fetch 会立即以 not a git repository 失败
     cd "${TEST_TMPDIR}"
     LLAMA_CPP_SRC="$fake_repo"
-    release_tag="b4000"
-    current_commit="$(git -C "$fake_repo" rev-parse HEAD)"
-    current_short="${current_commit:0:7}"
+    # 经具名入口设置会话状态（C4），不再直接戳全局
+    _session_capture_current
+    _session_set_target "b4000" ""
 
     run _update_source
     [ "$status" -eq 0 ]
@@ -177,7 +173,7 @@ load test_helper
     [ "$status" -ne 0 ]
 }
 
-@test "_save_state captures empty branch when detached HEAD" {
+@test "_session_capture_current captures empty branch when detached HEAD" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     local fake_repo="${TEST_TMPDIR}/detached_repo"
@@ -189,7 +185,7 @@ load test_helper
     git -C "$fake_repo" checkout -q "$commit_sha" 2>/dev/null
 
     LLAMA_CPP_SRC="$fake_repo"
-    _save_state
+    _session_capture_current
     [ -n "$current_commit" ]
     [ -z "$current_branch" ]
 }
@@ -216,8 +212,9 @@ load test_helper
     second_commit=$(git -C "$fake_repo" rev-parse HEAD)
 
     LLAMA_CPP_SRC="$fake_repo"
+    # 直接赋值 current_commit 模拟「已捕获」状态（HEAD 已在第二 commit，
+    # 不能调 _session_capture_current——它会把 HEAD 捕获成新版本）
     current_commit="$first_commit"
-    current_short=$(git -C "$fake_repo" rev-parse --short "$first_commit")
 
     run _rollback
     [ "$status" -eq 0 ]
@@ -249,6 +246,74 @@ load test_helper
     [[ "$output" =~ "检查前置条件" || "$output" =~ "不存在" || "$output" =~ "ERROR" || "$output" =~ "失败" ]]
 }
 
+# --- _short_sha 派生函数（C4：derive-don't-store）---
+
+@test "_short_sha prints first 7 chars of a full SHA" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    run _short_sha "abc1234567890abcdef1234567890abcdef12"
+    [ "$status" -eq 0 ]
+    [ "$output" = "abc1234" ]
+}
+
+@test "_short_sha returns empty string for empty input" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    run _short_sha ""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "_short_sha returns short input unchanged" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    run _short_sha "abc"
+    [ "$status" -eq 0 ]
+    [ "$output" = "abc" ]
+}
+
+# --- 具名写入口（C4）---
+
+@test "_session_set_target writes release_tag and release_date" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    _session_set_target "b4000" "2026-01-15T10:30:00Z"
+    [ "$release_tag" = "b4000" ]
+    [ "$release_date" = "2026-01-15T10:30:00Z" ]
+    # date 可省略（用户指定版本路径无发布日期）
+    _session_set_target "b4001"
+    [ "$release_tag" = "b4001" ]
+    [ -z "$release_date" ]
+}
+
+# --- _parse_args out-param（C4：target_version 参数化）---
+
+@test "_parse_args writes target version via out-param" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    local target=""
+    _parse_args target "b4000"
+    [ "$target" = "b4000" ]
+}
+
+@test "_parse_args writes empty target when no args" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    local target="stale"
+    _parse_args target
+    [ -z "$target" ]
+}
+
+@test "_parse_args rejects invalid out-param names" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    # 保留前缀（函数内部局部变量命名空间）与非标识符名均拒绝（C1 防呆模式）
+    run _parse_args "_pa_reserved" b4000
+    [ "$status" -eq 2 ]
+    run _parse_args "1bad-name" b4000
+    [ "$status" -eq 2 ]
+}
+
 # --- _resolve_target 单元测试 ---
 
 @test "_resolve_target: user-specified target version (full commit SHA)" {
@@ -258,72 +323,83 @@ load test_helper
     local full_sha
     full_sha=$(git -C "$fake_repo" rev-parse HEAD)
 
-    # 模拟用户传入 40 字符的 commit SHA
-    target_version="$full_sha"
-    release_tag=""; release_short=""
-    current_commit=""; current_tag=""; current_short=""
-    need_source_update=0; skip_update=0
+    # 网络层 stub（gh/curl 必失败）：保证任何情况下测试离线——
+    # 若 _resolve_target 误走 fetch 路径（如参数被忽略），seam 双失败即 die
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
 
-    # 重定向到文件而非 bats run：run 在子 shell 执行，函数内全局赋值会丢失
-    _resolve_target > "${TEST_TMPDIR}/out.txt"
+    # C4：目标版本经参数传入；重定向文件替代 bats run（run 在子 shell
+    # 执行，函数内全局赋值对测试体不可见）
+    _resolve_target "$full_sha" > "${TEST_TMPDIR}/out.txt"
     [ "$release_tag" = "$full_sha" ]
-    [ "$release_short" = "${full_sha:0:7}" ]
-    # C5 后 rel_commit 是局部变量，其可观测面是「对应 Commit」显示行
+    # rel_commit 是局部变量，其可观测面是「对应 Commit」显示行
     grep -qF "${full_sha:0:7} (${full_sha})" "${TEST_TMPDIR}/out.txt"
 }
 
 @test "_resolve_target: user-specified target version (tag name)" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
-    local fake_repo="${TEST_TMPDIR}/llama.cpp"
-    git -C "$fake_repo" tag b4000 HEAD
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
 
-    # 模拟用户传入标签名（非 40 字符 SHA）
-    target_version="b4000"
-    release_tag=""; release_short=""
-    current_commit=""; current_tag=""; current_short=""
-    need_source_update=0; skip_update=0
-
-    _resolve_target > /dev/null
+    _resolve_target b4000 > /dev/null
     [ "$release_tag" = "b4000" ]
-    # 标签路径无 commit 信息 → release_short 落回 unknown 哨兵
-    [ "$release_short" = "unknown" ]
 }
 
-@test "_resolve_target: already on target tag → skip" {
+@test "_resolve_target: already on target tag → no source update needed" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
     git -C "$fake_repo" tag b4000 HEAD
-    local head_sha
-    head_sha=$(git -C "$fake_repo" rev-parse HEAD)
 
-    # 当前和目标都是 b4000
-    target_version="b4000"
-    release_tag="b4000"; release_short="${head_sha:0:7}"
-    current_commit="$head_sha"; current_tag="b4000"; current_short="${head_sha:0:7}"
-    need_source_update=0; skip_update=0
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
 
-    _resolve_target
+    # 经具名入口从 git 真实捕获（current_tag=b4000），不再手填全局
+    _session_capture_current
+    _resolve_target b4000 > /dev/null
     [ "$need_source_update" -eq 0 ]
 }
 
 @test "_resolve_target: different version → need update" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
-    local fake_repo="${TEST_TMPDIR}/llama.cpp"
-    git -C "$fake_repo" tag b4000 HEAD
-    local head_sha
-    head_sha=$(git -C "$fake_repo" rev-parse HEAD)
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
 
-    # 当前是 b3000，目标是 b4000
-    target_version="b4000"
-    release_tag="b4000"; release_short="unknown"
-    current_commit="abc123def456789abc123def456789abc123def4"; current_tag="b3000"; current_short="abc123d"
-    need_source_update=0; skip_update=0
-
-    _resolve_target
+    _session_capture_current
+    _resolve_target b4000 > /dev/null
     [ "$need_source_update" -eq 1 ]
+}
+
+@test "_resolve_target always writes both decision flags (reentrant)" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
+
+    # 预填陈旧决策：非 skip 路径必须显式重置 skip_update（旧实现只在
+    # skip 路径写 1，靠顶部初始化保证 0——写入点收敛后由入口自己保证两态）
+    skip_update=1
+    _session_capture_current
+    _resolve_target b4000 > /dev/null
+    [ "$need_source_update" -eq 1 ]
+    [ "$skip_update" -eq 0 ]
 }
 
 @test "_resolve_target: fetch path parses TAB line into release globals" {
@@ -335,24 +411,21 @@ load test_helper
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
 if [[ "$1" == "auth" ]]; then exit 0; fi
-printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc123def4567890abc123def4567890abc12345","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
     PATH="${mock_dir}:$PATH"
 
-    # 无 target_version → 走 seam 查询路径；TAB 行分解进 release 全局
+    # 无参数 → 走 seam 查询路径；TAB 行分解进 release 全局
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
-    target_version=""
-    release_tag=""; release_date=""; release_short=""
-    current_tag=""; current_short=""
     current_commit=$(git -C "$fake_repo" rev-parse HEAD)
-    need_source_update=0; skip_update=0
+    current_tag=""
 
     _resolve_target > "${TEST_TMPDIR}/out.txt"
     [ "$release_tag" = "b4000" ]
     [ "$release_date" = "2026-01-15T10:30:00Z" ]
-    # rel_commit 的可观测面：短 SHA 出现在「对应 Commit」显示行
-    [ "$release_short" = "abc1234" ]
+    # rel_commit/rel_url 的可观测面：显示行（短 SHA 与发布页面）
+    grep -qF "对应 Commit: abc123d (abc123def4567890abc123def4567890abc12345)" "${TEST_TMPDIR}/out.txt"
     grep -qF "发布页面:    https://github.com/ggml-org/llama.cpp/releases/tag/b4000" "${TEST_TMPDIR}/out.txt"
 }
 

@@ -158,3 +158,37 @@ load test_helper
     [ -n "$body" ]
     ! grep -qE 'command -v gh|gh auth status|_fetch_latest_release_gh|_fetch_latest_release_curl' <<< "$body"
 }
+
+@test "update.sh session state: exactly 7 globals, each initialized once at script level" {
+    # C4 契约：会话全局从 15 个收敛到 7 个——脚本级（顶格）赋值仅为状态节
+    # 初始化，每个变量恰好一次；过程式写入全部收敛在具名入口内
+    local count
+    count=$(grep -cE '^(current_commit|current_tag|current_branch|release_tag|release_date|need_source_update|skip_update)=' \
+        "${BATS_TEST_DIRNAME}/../update.sh")
+    [ "$count" -eq 7 ]
+}
+
+@test "update.sh derived/localized state names no longer exist" {
+    # C4 契约：current_short/release_short 已由 _short_sha 派生——全文件不得
+    # 再出现（连局部变量也不应绕过派生机制）；actual_*/target_version/
+    # release_commit/release_url 已局部化或参数化——不得再有脚本级顶格赋值
+    ! grep -nE '\bcurrent_short\b|\brelease_short\b' "${BATS_TEST_DIRNAME}/../update.sh"
+    ! grep -nE '^(actual_commit|actual_tag|target_version|release_commit|release_url)=' \
+        "${BATS_TEST_DIRNAME}/../update.sh"
+}
+
+@test "update.sh session globals are written only inside their named entry points" {
+    # C4 契约：缩进（函数体内）的会话全局赋值只允许出现在各自的具名入口：
+    #   release_tag/release_date      → _session_set_target
+    #   current_commit/current_tag/current_branch → _session_capture_current
+    # awk 状态机：进入允许函数置 in_ok，行首 } 退出；函数体外的违规赋值即失败
+    local violations
+    violations=$(awk '
+        /^_session_set_target\(\)/   { in_target=1; next }
+        /^_session_capture_current\(\)/ { in_current=1; next }
+        /^}/                          { in_target=0; in_current=0; next }
+        /^[[:space:]]+(release_tag|release_date)=/ && !in_target   { print "release_* outside _session_set_target: line " NR }
+        /^[[:space:]]+current_(commit|tag|branch)=/ && !in_current { print "current_* outside _session_capture_current: line " NR }
+    ' "${BATS_TEST_DIRNAME}/../update.sh")
+    [ -z "$violations" ] || { echo "$violations"; return 1; }
+}
