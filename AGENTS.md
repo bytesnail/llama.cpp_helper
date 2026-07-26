@@ -17,7 +17,7 @@
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
 make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
 make syntax         # bash -n 语法检查
-make test           # bats-core 测试套件（191 项）
+make test           # bats-core 测试套件（数量随开发增长，`make help` 显示实时计数）
 
 # 运行单个测试文件
 bats tests/test_common.bats

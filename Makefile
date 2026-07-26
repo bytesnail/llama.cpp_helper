@@ -10,11 +10,11 @@ TEST_COUNT   := $(shell grep -c '@test' tests/*.bats 2>/dev/null | awk -F: '{s+=
 # 运行依赖工具的目标前先验证工具可用性
 _check_shellcheck: SHELLCHECK_OK := $(shell command -v shellcheck 2>/dev/null)
 _check_shellcheck:
-	@[ -n "$(SHELLCHECK_OK)" ] || { echo "Error: shellcheck not found. Install: apt install shellcheck"; exit 1; }
+	@[ -n "$(SHELLCHECK_OK)" ] || { echo "错误: 未找到 shellcheck，请安装: apt install shellcheck"; exit 1; }
 
 _check_bats: BATS_OK := $(shell command -v bats 2>/dev/null)
 _check_bats:
-	@[ -n "$(BATS_OK)" ] || { echo "Error: bats not found. Install: bats (https://github.com/bats-core/bats-core)"; exit 1; }
+	@[ -n "$(BATS_OK)" ] || { echo "错误: 未找到 bats，请安装: bats (https://github.com/bats-core/bats-core)"; exit 1; }
 
 
 .PHONY: lint syntax test check all help _check_shellcheck _check_bats
