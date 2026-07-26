@@ -160,9 +160,9 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 - **文件锁**：`flock` + 动态 FD（`exec {fd}>>`），`build.sh` 和 `update.sh` 互斥，均在参数解析**之后**获取（`--help`/`--version` 不受锁占用影响）；`update.sh` 在调用 `build.sh` 前释放锁以避免死锁，构建失败进入回滚前重新取锁（回滚修改源码树，防止与并发进程交错）
 - **构建失败清理**：`build.sh` 通过双重 trap（SIGINT/SIGTERM 显式退出码 + EXIT）删除未完成构建目录
-- **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义
+- **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义；用户指定的裸 commit 按 7-40 位 hex 经 `rev-parse` 通用解析（短/完整 SHA），同名纯 hex tag 优先按 tag 处理；中断恢复与构建失败回滚执行前均须持有文件锁（`_cleanup_on_interrupt` 经 `LOCK_FD` 判断本进程持锁状态，构建成功后经 `llama_cleanup_trap` 解除中断恢复 trap，成功事务不可被信号撤销）
 - **磁盘空间检查**：构建前验证 ≥10GB 可用（`llama_check_disk_space`）
-- **子模块清理**：`update.sh` 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目（`ls-files --stage` 按 TAB 解析，兼容含空格路径）
+- **子模块清理**：`update.sh` 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目（`ls-files --stage` 按 TAB 解析，兼容含空格路径；`core.quotePath=false` 兼容非 ASCII 路径）。三重安全契约：`git ls-files` 失败则白名单构建失败、保守不删除（进程替换吞错曾导致空白名单全删，已实证）；find 不深入当前子模块内部（嵌套子模块豁免）；gitdir 指针必须指向 `.git/modules/`（未跟踪 worktree 指向 `.git/worktrees/`，预检查放行的未跟踪内容不得删除）。清理失败经调用点 `|| true` 容忍，不阻断更新/回滚主流程
 
 ## 注意事项
 

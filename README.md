@@ -185,8 +185,8 @@ bash build.sh -i    # 增量构建（保留 build 目录，仅重新编译变更
 
 ```bash
 bash update.sh         # 更新到最新构建标签
-bash update.sh b3631   # 更新到指定 commit
 bash update.sh b8941   # 更新到指定标签
+bash update.sh 1a2b3c4 # 更新到指定 commit（7-40 位 SHA）
 ```
 
 **安全特性：** 文件锁、未提交更改检查（含子模块脏状态检查）、远程 origin 验证、构建失败自动回滚（含详细恢复指导）、中断信号处理（SIGINT/SIGTERM 时自动恢复原始版本）、旧子模块残留自动清理。
@@ -301,7 +301,7 @@ CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 
 | 变量 | 值 | 说明 |
 |------|-----|------|
-| `GGML_CUDA_P2P` | `1` | 启用 GPU 间 P2P 直传（NVLink 绕过系统内存） |
+| `GGML_CUDA_P2P` | `1` | 启用 GPU 间 P2P 直传（NVLink 绕过系统内存）。**存在性语义**：llama.cpp 仅检测变量是否存在——置 `0` 不关闭，关闭须 `unset GGML_CUDA_P2P` |
 | `CUDA_SCALE_LAUNCH_QUEUES` | `4x` | 增大 CUDA 命令缓冲区（多 GPU 并行受益） |
 
 > 若变量已被用户预先设置（`export`），`run_env.sh` 会保留用户值而非覆盖。
