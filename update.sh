@@ -65,7 +65,11 @@ _short_sha() {
 # 三全局的唯一写入入口（C4）。
 # Usage: _session_capture_current
 _session_capture_current() {
-    current_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    # rev-parse 失败必须显式 die（fail-closed 与 _check_local_repo 的 status
+    # 守卫一致）：裸赋值在 main 顶层 set -e 下会无诊断中止，回滚锚点丢失
+    # 的原因不可见
+    current_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD) \
+        || llama_die "无法读取当前 commit（Git 仓库损坏？）: ${LLAMA_CPP_SRC}"
     # 无标签/无分支（detached HEAD）时留空串——原 "(无标签)" 哨兵字符串
     # 把显示文案与逻辑判断耦合（消费点需逐个过滤哨兵）
     current_tag=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || true)
@@ -306,7 +310,14 @@ _fetch_latest_release_curl() {
 
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local tmp
-    tmp=$(mktemp "${TMPDIR:-/tmp}/llama_release.XXXXXX.json")
+    # mktemp 失败必须显式诊断：本函数经 if 条件调用（_fetch_latest_release →
+    # _resolve_target），函数体内 set -e 失效——裸赋值失败后空 tmp 会让后续
+    # curl 写空路径失败，把临时文件故障误诊为网络问题（与 common.sh 的
+    # mktemp || var="" 防护契约对齐；此处无临时文件无法工作，直接返回失败）
+    tmp=$(mktemp "${TMPDIR:-/tmp}/llama_release.XXXXXX.json" 2>/dev/null) || {
+        llama_err "无法创建临时文件（${TMPDIR:-/tmp} 不可写或空间不足？）"
+        return 1
+    }
     # 注意：此处不使用 RETURN trap 清理 $tmp —— bash 的 RETURN trap 不限定于
     # 当前函数，设置后会持续到脚本结束并在其后每个函数返回时触发（全局泄漏，
     # 还会覆盖其它 RETURN trap）。改为在每条退出路径显式 rm -f。
@@ -588,7 +599,10 @@ _update_source() {
     fi
 
     local actual_commit actual_tag
-    actual_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    # 与 _session_capture_current 同一防护：checkout 后 git 失败时 set -e
+    # 裸中止会跳过一致性校验且无任何诊断
+    actual_commit=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD) \
+        || llama_die "无法读取 checkout 后的 HEAD commit: ${LLAMA_CPP_SRC}"
     actual_tag=$(git -C "$LLAMA_CPP_SRC" describe --tags --exact-match 2>/dev/null || true)
 
     if [[ -n "$actual_tag" && "$actual_tag" != "$release_tag" ]]; then

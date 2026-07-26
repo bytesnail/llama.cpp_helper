@@ -627,7 +627,10 @@ llama_check_disk_space() {
     # || true：df 在某些文件系统（FUSE/损坏挂载）下失败时，pipefail 使管线返回非零，
     # 在 set -e 下会中止脚本。本函数契约是"不阻塞"（仅警告），故显式忽略退出码，
     # 交由下方 -z 检查处理空输出。
-    available_kb=$(LC_ALL=C df -P "$path" 2>/dev/null | awk 'NR==2 {print $4}') || true
+    # -k 强制 1K 块：POSIXLY_CORRECT=1 时裸 -P 退化为 512 字节块（POSIX 语义的
+    # 默认块大小），可用量被高估 2×（实测）——fail-open 方向，会把磁盘不足
+    # 误判为充足。
+    available_kb=$(LC_ALL=C df -Pk "$path" 2>/dev/null | awk 'NR==2 {print $4}') || true
     if [[ -z "$available_kb" ]]; then
         llama_warn "无法获取磁盘空间信息"
         return 0
