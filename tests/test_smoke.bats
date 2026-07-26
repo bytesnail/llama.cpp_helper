@@ -133,3 +133,28 @@ load test_helper
     "
     [ "$status" -eq 0 ]
 }
+
+@test "release fetchers do not write release_* globals" {
+    # C5 契约：_fetch_latest_release（seam）与两个 adapter 经 stdout 返回
+    # TAB 行；release_* 全局的写入已收敛到具名入口，fetcher 函数体内
+    # 不得出现 release_* 赋值
+    local fn body
+    for fn in _fetch_latest_release _fetch_latest_release_gh _fetch_latest_release_curl; do
+        body=$(sed -n "/^${fn}()/,/^}/p" "${BATS_TEST_DIRNAME}/../update.sh")
+        [ -n "$body" ] || { echo "function missing: ${fn}"; return 1; }
+        if grep -qE 'release_(tag|commit|date|url)=' <<< "$body"; then
+            echo "${fn} writes release_* globals:"
+            grep -nE 'release_(tag|commit|date|url)=' <<< "$body"
+            return 1
+        fi
+    done
+}
+
+@test "_resolve_target contains no gh/curl adapter selection logic" {
+    # C5 契约：gh 认证检测与 curl 回退的选择逻辑收进 _fetch_latest_release
+    # seam 内部；_resolve_target 只剩版本对比本职
+    local body
+    body=$(sed -n '/^_resolve_target()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")
+    [ -n "$body" ]
+    ! grep -qE 'command -v gh|gh auth status|_fetch_latest_release_gh|_fetch_latest_release_curl' <<< "$body"
+}

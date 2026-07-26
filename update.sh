@@ -22,9 +22,7 @@ BUILD_SCRIPT="${SCRIPT_DIR}/build.sh"
 readonly BUILD_SCRIPT
 # --- 状态变量 ------------------------------------------------
 release_tag=""
-release_commit=""
 release_date=""
-release_url=""
 current_commit=""
 current_short=""
 current_tag=""
@@ -207,18 +205,39 @@ _print_success_summary() {
 }
 
 # --- GitHub API 查询 -----------------------------------------
+# C5：_fetch_latest_release 是 release 查询的唯一显式 seam——gh/curl 选择
+# 逻辑收在其内部，adapter 退到幕后。seam 与 adapter 的 stdout 契约：成功时
+# 仅输出一行 TAB 分隔的 tag/commit/date/url（_parse_release_json 形态），
+# 失败时返回非零且 stdout 无输出；一切日志走 stderr（>&2），调用点用
+# parsed=$(_fetch_latest_release) 捕获时不会混入日志。
+
+# Usage: _fetch_latest_release
+# 显式 seam：gh 已认证走 gh adapter（失败回退 curl），否则直接 curl adapter。
+_fetch_latest_release() {
+    if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+        llama_info "使用 gh CLI 查询（已认证）" >&2
+        if _fetch_latest_release_gh; then
+            return 0
+        fi
+        llama_warn "gh 查询失败，回退到 curl" >&2
+    else
+        llama_warn "gh 未安装或未登录，使用 curl 直接访问 API" >&2
+    fi
+    _fetch_latest_release_curl
+}
+
 # Usage: _fetch_latest_release_gh
+# gh adapter：成功输出 TAB 行，失败返回 1（不写任何全局）。
 _fetch_latest_release_gh() {
     local json
     if ! json=$(gh release view --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
         return 1
     fi
-    local parsed
-    parsed=$(printf '%s' "$json" | _parse_release_json tagName targetCommitish publishedAt url) || return 1
-    IFS=$'\t' read -r release_tag release_commit release_date release_url <<< "$parsed"
+    printf '%s' "$json" | _parse_release_json tagName targetCommitish publishedAt url
 }
 
 # Usage: _fetch_latest_release_curl
+# curl adapter：成功输出 TAB 行，失败返回 1（不写任何全局）。
 _fetch_latest_release_curl() {
     if ! command -v curl &>/dev/null; then
         llama_err "需要 curl 命令，请先安装"
@@ -252,9 +271,8 @@ _fetch_latest_release_curl() {
     # 使用 stdin 重定向，避免路径注入到 Python 字符串中
     local parsed
     parsed=$(_parse_release_json tag_name target_commitish published_at html_url < "$tmp") || { rm -f "$tmp"; return 1; }
-    IFS=$'\t' read -r release_tag release_commit release_date release_url <<< "$parsed"
-
     rm -f "$tmp"
+    printf '%s\n' "$parsed"
 }
 
 # --- 子函数 --------------------------------------------------
@@ -355,46 +373,39 @@ _check_local_repo() {
 
 # Usage: _resolve_target
 _resolve_target() {
+    # rel_commit/rel_url 仅本函数消费（版本对比与显示），保持局部；
+    # release_tag/release_date 跨函数使用（构建摘要/恢复指引），仍为全局（C4 收敛）
+    local rel_commit="" rel_url=""
     if [[ -n "$target_version" ]]; then
         release_tag="$target_version"
         if llama_is_full_commit_sha "$target_version"; then
-            release_commit="$target_version"
+            rel_commit="$target_version"
         fi
         llama_info "使用用户指定的版本: ${release_tag}"
     else
         llama_info "正在查询 GitHub 最新发布版本..."
-
-        if command -v gh &>/dev/null && gh auth status &>/dev/null; then
-            llama_info "使用 gh CLI 查询（已认证）"
-            if ! _fetch_latest_release_gh; then
-                llama_warn "gh 查询失败，回退到 curl"
-                if ! _fetch_latest_release_curl; then
-                    llama_die "无法获取最新版本信息"
-                fi
-            fi
-        else
-            llama_warn "gh 未安装或未登录，使用 curl 直接访问 API"
-            if ! _fetch_latest_release_curl; then
-                llama_die "无法获取最新版本信息"
-            fi
+        # C5：选择逻辑（gh→curl 回退）收在 seam 内部；此处只消费 TAB 行
+        local parsed
+        if ! parsed=$(_fetch_latest_release); then
+            llama_die "无法获取最新版本信息"
         fi
-
+        IFS=$'\t' read -r release_tag rel_commit release_date rel_url <<< "$parsed"
         llama_ok "查询成功"
     fi
 
     # 显示版本信息
     # bash 子串对短字符串天然返回整串；空值显示 unknown
-    release_short="${release_commit:0:7}"
+    release_short="${rel_commit:0:7}"
     : "${release_short:=unknown}"
     llama_detail "目标版本:    ${release_tag}"
-    if [[ -n "$release_commit" ]] && llama_is_full_commit_sha "$release_commit"; then
-        llama_detail "对应 Commit: ${release_short} (${release_commit})"
+    if [[ -n "$rel_commit" ]] && llama_is_full_commit_sha "$rel_commit"; then
+        llama_detail "对应 Commit: ${release_short} (${rel_commit})"
     fi
     if [[ -n "$release_date" ]]; then
         llama_detail "发布时间:    ${release_date}"
     fi
-    if [[ -n "$release_url" ]]; then
-        llama_detail "发布页面:    ${release_url}"
+    if [[ -n "$rel_url" ]]; then
+        llama_detail "发布页面:    ${rel_url}"
     fi
 
     # 版本对比
@@ -403,7 +414,7 @@ _resolve_target() {
     if [[ "${current_tag}" = "${release_tag}" ]]; then
         llama_ok "本地已在该版本 (${release_tag})，无需更新源码"
         need_source_update=0
-    elif [[ ${#release_commit} -ge 7 ]] && [[ "$(git -C "$LLAMA_CPP_SRC" rev-parse --verify "${release_commit}^{commit}" 2>/dev/null)" == "$current_commit" ]]; then
+    elif [[ ${#rel_commit} -ge 7 ]] && [[ "$(git -C "$LLAMA_CPP_SRC" rev-parse --verify "${rel_commit}^{commit}" 2>/dev/null)" == "$current_commit" ]]; then
         # 一条路径同时覆盖完整 SHA 与可解析 commitish（分支名/短 SHA）
         llama_ok "本地已是最新 commit (${release_short})，无需更新源码"
         need_source_update=0

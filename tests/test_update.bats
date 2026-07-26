@@ -260,15 +260,16 @@ load test_helper
 
     # 模拟用户传入 40 字符的 commit SHA
     target_version="$full_sha"
-    release_tag=""; release_commit=""; release_short=""
+    release_tag=""; release_short=""
     current_commit=""; current_tag=""; current_short=""
     need_source_update=0; skip_update=0
 
-    _resolve_target
-    # target_version 是完整 SHA → release_commit 应被设置
-    [ "$release_commit" = "$full_sha" ]
+    # 重定向到文件而非 bats run：run 在子 shell 执行，函数内全局赋值会丢失
+    _resolve_target > "${TEST_TMPDIR}/out.txt"
     [ "$release_tag" = "$full_sha" ]
     [ "$release_short" = "${full_sha:0:7}" ]
+    # C5 后 rel_commit 是局部变量，其可观测面是「对应 Commit」显示行
+    grep -qF "${full_sha:0:7} (${full_sha})" "${TEST_TMPDIR}/out.txt"
 }
 
 @test "_resolve_target: user-specified target version (tag name)" {
@@ -279,14 +280,14 @@ load test_helper
 
     # 模拟用户传入标签名（非 40 字符 SHA）
     target_version="b4000"
-    release_tag=""; release_commit=""; release_short=""
+    release_tag=""; release_short=""
     current_commit=""; current_tag=""; current_short=""
     need_source_update=0; skip_update=0
 
-    _resolve_target
-    # 非完整 SHA → release_tag 被设置，release_commit 不被设置
+    _resolve_target > /dev/null
     [ "$release_tag" = "b4000" ]
-    [ -z "$release_commit" ]
+    # 标签路径无 commit 信息 → release_short 落回 unknown 哨兵
+    [ "$release_short" = "unknown" ]
 }
 
 @test "_resolve_target: already on target tag → skip" {
@@ -299,7 +300,7 @@ load test_helper
 
     # 当前和目标都是 b4000
     target_version="b4000"
-    release_tag="b4000"; release_commit="$head_sha"; release_short="${head_sha:0:7}"
+    release_tag="b4000"; release_short="${head_sha:0:7}"
     current_commit="$head_sha"; current_tag="b4000"; current_short="${head_sha:0:7}"
     need_source_update=0; skip_update=0
 
@@ -317,7 +318,7 @@ load test_helper
 
     # 当前是 b3000，目标是 b4000
     target_version="b4000"
-    release_tag="b4000"; release_commit=""; release_short="unknown"
+    release_tag="b4000"; release_short="unknown"
     current_commit="abc123def456789abc123def456789abc123def4"; current_tag="b3000"; current_short="abc123d"
     need_source_update=0; skip_update=0
 
@@ -325,28 +326,42 @@ load test_helper
     [ "$need_source_update" -eq 1 ]
 }
 
-@test "_resolve_target: release_short derivation from 40-char commit" {
+@test "_resolve_target: fetch path parses TAB line into release globals" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
-    local fake_repo="${TEST_TMPDIR}/llama.cpp"
-    local full_sha
-    full_sha=$(git -C "$fake_repo" rev-parse HEAD)
-    git -C "$fake_repo" tag b4000 HEAD
+    # stub gh（auth 成功 + release view 输出 JSON），经 PATH 前置生效
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    cat > "${mock_dir}/gh" << 'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "auth" ]]; then exit 0; fi
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+MOCK_EOF
+    chmod +x "${mock_dir}/gh"
+    PATH="${mock_dir}:$PATH"
 
-    # 用户指定标签（非 SHA），但预填充 release_commit 测试 release_short 推导
-    target_version="b4000"
-    release_tag="b4000"; release_commit="$full_sha"; release_short=""
-    current_commit="someother"; current_tag="b3000"; current_short=""
+    # 无 target_version → 走 seam 查询路径；TAB 行分解进 release 全局
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    target_version=""
+    release_tag=""; release_date=""; release_short=""
+    current_tag=""; current_short=""
+    current_commit=$(git -C "$fake_repo" rev-parse HEAD)
     need_source_update=0; skip_update=0
 
-    _resolve_target
-    # 40 字符 SHA → release_short 应为前 7 位
-    [ "$release_short" = "${full_sha:0:7}" ]
+    _resolve_target > "${TEST_TMPDIR}/out.txt"
+    [ "$release_tag" = "b4000" ]
+    [ "$release_date" = "2026-01-15T10:30:00Z" ]
+    # rel_commit 的可观测面：短 SHA 出现在「对应 Commit」显示行
+    [ "$release_short" = "abc1234" ]
+    grep -qF "发布页面:    https://github.com/ggml-org/llama.cpp/releases/tag/b4000" "${TEST_TMPDIR}/out.txt"
 }
 
-# --- _fetch_latest_release_gh / _fetch_latest_release_curl mock 测试 ---
+# --- _fetch_latest_release seam / adapter 测试（C5）---
+# C5 后 adapter 经 stdout 返回 TAB 行（tag/commit/date/url），不再写全局；
+# seam _fetch_latest_release 内藏 gh→curl 选择逻辑，stdout 契约只允许 TAB 行
+# （选择日志走 stderr）。
 
-@test "_fetch_latest_release_gh parses gh JSON output correctly" {
+@test "_fetch_latest_release_gh outputs TAB-separated release line" {
     local mock_dir inner
     mock_dir=$(mktemp -d)
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
@@ -355,7 +370,30 @@ printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
 
-    # 将测试脚本写入文件：变量部分用 echo 展开字面部分用引用 heredoc
+    inner="${mock_dir}/test_inner.sh"
+    {
+        echo "#!/bin/bash"
+        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
+        echo "PATH='${mock_dir}:$PATH'"
+        echo '_fetch_latest_release_gh'
+    } > "$inner"
+
+    run bash "$inner"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
+
+    rm -rf "${mock_dir}"
+}
+
+@test "_fetch_latest_release_gh writes no release_* globals" {
+    local mock_dir inner
+    mock_dir=$(mktemp -d)
+    cat > "${mock_dir}/gh" << 'MOCK_EOF'
+#!/bin/bash
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+MOCK_EOF
+    chmod +x "${mock_dir}/gh"
+
     inner="${mock_dir}/test_inner.sh"
     {
         echo "#!/bin/bash"
@@ -363,25 +401,25 @@ MOCK_EOF
         echo "PATH='${mock_dir}:$PATH'"
         cat << 'INNER_EOF'
 release_tag=""; release_commit=""; release_date=""; release_url=""
-_fetch_latest_release_gh
-echo "tag=$release_tag"
-echo "commit=$release_commit"
-echo "date=$release_date"
-echo "url=$release_url"
+_fetch_latest_release_gh >/dev/null
+echo "tag=[${release_tag}]"
+echo "commit=[${release_commit}]"
+echo "date=[${release_date}]"
+echo "url=[${release_url}]"
 INNER_EOF
     } > "$inner"
 
     run bash "$inner"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"tag=b4000"* ]]
-    [[ "$output" == *"commit=abc1234567890abcdef1234567890abcdef12"* ]]
-    [[ "$output" == *"date=2026-01-15T10:30:00Z"* ]]
-    [[ "$output" == *"url=https://github.com/ggml-org/llama.cpp/releases/tag/b4000"* ]]
+    [[ "$output" == *"tag=[]"* ]]
+    [[ "$output" == *"commit=[]"* ]]
+    [[ "$output" == *"date=[]"* ]]
+    [[ "$output" == *"url=[]"* ]]
 
     rm -rf "${mock_dir}"
 }
 
-@test "_fetch_latest_release_curl parses curl JSON response correctly" {
+@test "_fetch_latest_release_curl outputs TAB-separated release line" {
     local mock_dir inner
     mock_dir=$(mktemp -d)
     # mock curl：解析 -o 参数写入 mock JSON，输出 HTTP 200
@@ -393,22 +431,12 @@ INNER_EOF
         echo "#!/bin/bash"
         echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
         echo "PATH='${mock_dir}:$PATH'"
-        cat << 'INNER_EOF'
-release_tag=""; release_commit=""; release_date=""; release_url=""
-_fetch_latest_release_curl
-echo "tag=$release_tag"
-echo "commit=$release_commit"
-echo "date=$release_date"
-echo "url=$release_url"
-INNER_EOF
+        echo '_fetch_latest_release_curl'
     } > "$inner"
 
     run bash "$inner"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"tag=b4001"* ]]
-    [[ "$output" == *"commit=def9876543210abcdef9876543210abcdef98"* ]]
-    [[ "$output" == *"date=2026-02-20T08:00:00Z"* ]]
-    [[ "$output" == *"url=https://github.com/ggml-org/llama.cpp/releases/tag/b4001"* ]]
+    [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
 
     # 验证临时文件已清理（实现为每条退出路径显式 rm -f，非 RETURN trap——
     # bash RETURN trap 会全局泄漏，见 update.sh 中该决策的注释）
@@ -459,6 +487,93 @@ INNER_EOF
     } > "$inner"
 
     run bash "$inner"
+    [ "$status" -eq 1 ]
+
+    rm -rf "${mock_dir}"
+}
+
+# --- _fetch_latest_release seam 选择逻辑测试（C5）---
+
+# Usage: _run_fetch_with_path <mock_dir> <call>
+# 在子进程中 source update.sh（提取模式）、前置 mock_dir 到 PATH、执行 <call>，
+# 结果经 bats run 捕获（$status/$output 由动态作用域回到调用者）。
+_run_fetch_with_path() {
+    local mock_dir="$1"
+    local call="$2"
+    local inner="${mock_dir}/test_inner.sh"
+    {
+        echo "#!/bin/bash"
+        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
+        echo "PATH='${mock_dir}':\"\$PATH\""
+        printf '%s\n' "$call"
+    } > "$inner"
+    run bash "$inner"
+}
+
+@test "_fetch_latest_release prefers gh adapter when authenticated" {
+    local mock_dir
+    mock_dir=$(mktemp -d)
+    # gh stub：auth status 成功，release view 输出 JSON
+    cat > "${mock_dir}/gh" << 'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "auth" ]]; then exit 0; fi
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+MOCK_EOF
+    chmod +x "${mock_dir}/gh"
+    # curl stub 输出不同 tag——若其内容出现在 stdout 说明选择逻辑错误
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 '{"tag_name":"b9999","target_commitish":"x","published_at":"y","html_url":"z"}')"
+
+    # stderr 丢弃：精确等值断言同时钉住「选择日志不污染 stdout」的 seam 契约
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
+
+    rm -rf "${mock_dir}"
+}
+
+@test "_fetch_latest_release falls back to curl when gh query fails" {
+    local mock_dir
+    mock_dir=$(mktemp -d)
+    # gh stub：auth status 成功但 release view 失败
+    cat > "${mock_dir}/gh" << 'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "auth" ]]; then exit 0; fi
+exit 1
+MOCK_EOF
+    chmod +x "${mock_dir}/gh"
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}')"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
+
+    rm -rf "${mock_dir}"
+}
+
+@test "_fetch_latest_release uses curl directly when gh is not authenticated" {
+    local mock_dir
+    mock_dir=$(mktemp -d)
+    # gh stub：一切调用失败（auth status 非零 → seam 应直接走 curl）
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}')"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
+
+    rm -rf "${mock_dir}"
+}
+
+@test "_fetch_latest_release returns 1 when both adapters fail" {
+    local mock_dir
+    mock_dir=$(mktemp -d)
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 1 ]
 
     rm -rf "${mock_dir}"
