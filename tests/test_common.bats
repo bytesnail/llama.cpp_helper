@@ -129,7 +129,8 @@ teardown() {
 
 @test "llama_get_gpu_count returns count from mock nvidia-smi" {
     local mock_dir
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     printf '#!/bin/bash\nprintf "GPU 0\\nGPU 1\\n"\n' > "${mock_dir}/nvidia-smi"
     chmod +x "${mock_dir}/nvidia-smi"
 
@@ -139,8 +140,6 @@ teardown() {
     PATH="$_saved_path"
     [ "$status" -eq 0 ]
     [ "$output" = "2" ]
-
-    rm -rf "${mock_dir}"
 }
 
 # --- File Locking ---

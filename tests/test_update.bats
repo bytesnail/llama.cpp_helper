@@ -509,7 +509,8 @@ MOCK_EOF
 
 @test "_fetch_latest_release_gh outputs TAB-separated release line" {
     local mock_dir inner
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
 printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
@@ -527,13 +528,12 @@ MOCK_EOF
     run bash "$inner"
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release_gh writes no release_* globals" {
     local mock_dir inner
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
 printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
@@ -561,13 +561,12 @@ INNER_EOF
     [[ "$output" == *"commit=[]"* ]]
     [[ "$output" == *"date=[]"* ]]
     [[ "$output" == *"url=[]"* ]]
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release_curl outputs TAB-separated release line" {
     local mock_dir inner
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     # mock curl：解析 -o 参数写入 mock JSON，输出 HTTP 200
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 200 '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}')"
@@ -594,13 +593,12 @@ INNER_EOF
     # 验证临时文件已清理（实现为每条退出路径显式 rm -f，非 RETURN trap——
     # bash RETURN trap 会全局泄漏，见 update.sh 中该决策的注释）
     ! ls "$isolated_tmp"/llama_release.*.json 2>/dev/null
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release_curl returns 1 on HTTP failure" {
     local mock_dir inner
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     # mock curl：输出 HTTP 403
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 403 '{"message":"Forbidden"}')"
@@ -618,13 +616,12 @@ INNER_EOF
     run bash "$inner"
     [ "$status" -eq 1 ]
     [[ "$output" == *"HTTP 403"* ]]
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release_curl returns 1 on invalid JSON" {
     local mock_dir inner
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     # mock curl：HTTP 200 但返回无效 JSON
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 200 'this is not json at all')"
@@ -641,8 +638,6 @@ INNER_EOF
 
     run bash "$inner"
     [ "$status" -eq 1 ]
-
-    rm -rf "${mock_dir}"
 }
 
 # --- _fetch_latest_release seam 选择逻辑测试（C5）---
@@ -665,7 +660,8 @@ _run_fetch_with_path() {
 
 @test "_fetch_latest_release prefers gh adapter when authenticated" {
     local mock_dir
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     # gh stub：release view 输出 JSON（seam 不再预检 gh auth status——
     # 未认证时 release view 本身即失败并回退，预检是白付的一次 RTT）
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
@@ -681,13 +677,12 @@ MOCK_EOF
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release falls back to curl when gh query fails" {
     local mock_dir
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     # gh stub：release view 失败
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
@@ -700,13 +695,12 @@ MOCK_EOF
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release falls back to curl when gh is not authenticated" {
     local mock_dir
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     # gh stub：一切调用失败（未认证时 release view 即失败 → seam 回退 curl）
     _make_stub_exec "${mock_dir}/gh" "exit 1"
     _make_stub_exec "${mock_dir}/curl" \
@@ -715,18 +709,15 @@ MOCK_EOF
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
-
-    rm -rf "${mock_dir}"
 }
 
 @test "_fetch_latest_release returns 1 when both adapters fail" {
     local mock_dir
-    mock_dir=$(mktemp -d)
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
     _make_stub_exec "${mock_dir}/gh" "exit 1"
     _make_stub_exec "${mock_dir}/curl" "exit 1"
 
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 1 ]
-
-    rm -rf "${mock_dir}"
 }
