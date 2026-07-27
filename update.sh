@@ -13,7 +13,6 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 readonly SCRIPT_DIR
 # 注意：此处内联初始化 SCRIPT_DIR，因为 source common.sh 需要它。
-# llama_init_script_dir() 存在但仅在无法提前解析 SCRIPT_DIR 时使用（如 run_env.sh）。
 source "${SCRIPT_DIR}/common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/config.sh"

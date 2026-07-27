@@ -74,7 +74,7 @@ load test_helper
 @test "source run_env.sh does not leak config.sh readonly vars or SCRIPT_DIR" {
     # config.sh 改经子 shell 提取版本号：readonly 变量（REPO 等）不再灌入
     # 父 shell（readonly 无法 unset，用户后续同名赋值会报"只读变量"）；
-    # SCRIPT_DIR 不再被覆写（不再需要 llama_init_script_dir）
+    # SCRIPT_DIR 不被覆写（run_env.sh 刻意不设置，避免污染父 shell 同名变量）
     run bash -c "
         REPO=mine; SCRIPT_DIR=/opt/mine
         source '${BATS_TEST_DIRNAME}/../run_env.sh' >/dev/null 2>&1

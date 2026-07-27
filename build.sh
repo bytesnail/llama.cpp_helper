@@ -15,7 +15,6 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
 fi
 
 # 注意：此处内联初始化 SCRIPT_DIR，因为 source common.sh 需要它。
-# llama_init_script_dir() 存在但仅用于无法提前解析 SCRIPT_DIR 的场景（如 run_env.sh）。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 readonly SCRIPT_DIR
 source "${SCRIPT_DIR}/common.sh"

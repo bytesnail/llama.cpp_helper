@@ -267,12 +267,6 @@ teardown() {
 }
 
 # --- Init/Source/Help Helpers ---
-@test "llama_init_script_dir sets SCRIPT_DIR" {
-    llama_init_script_dir
-    [ -n "${SCRIPT_DIR:-}" ]
-    [ -d "${SCRIPT_DIR:-}" ]
-}
-
 @test "llama_show_help outputs usage with description" {
     run llama_show_help "test.sh" "A test script"
     [ "$status" -eq 0 ]

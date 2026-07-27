@@ -820,18 +820,10 @@ llama_return_or_exit() {
 }
 
 # --- 初始化/引用/帮助辅助 ------------------------------------
-# Usage: llama_init_script_dir
-# 将 SCRIPT_DIR 设置为调用脚本所在目录（解析后的绝对路径）。
-llama_init_script_dir() {
-    # 无条件按调用者位置重算：信任外部预设的通用名变量会错信用户环境中
-    # 已有的同名 SCRIPT_DIR（dotfiles 常用名）。不 export——source 场景
-    # （run_env.sh）下赋值在当前 shell 天然可见，export 会泄漏进父 shell。
-    local caller="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
-    if ! SCRIPT_DIR="$(cd "$(dirname "$caller")" >/dev/null && pwd)"; then
-        llama_err "无法解析脚本目录: ${caller}"
-        return 1
-    fi
-}
+# SCRIPT_DIR 由各入口脚本在 source common.sh 之前内联解析（见 build.sh /
+# update.sh 顶部）；run_env.sh 刻意不设置 SCRIPT_DIR——source 场景下赋值
+# 会覆写父 shell 的同名变量（dotfiles 常用名），其 run_env.sh:40-47 注释
+# 记录了该决定。
 
 # 帮助文本标签遵循文件顶部定义的语言策略。
 
