@@ -3,6 +3,9 @@
 # run_env.sh — 运行时性能优化环境变量
 # 硬件：2× RTX 2080 Ti (NVLink) — 离散 GPU，不建议启用统一内存
 # Usage: source /path/to/llama.cpp_helper/run_env.sh
+# 注意：在带位置参数的脚本/函数内 source 时，不传参会继承调用者的位置
+# 参数（bash source 语义）——请先 set -- 清空或显式传参（如 source
+# run_env.sh --status），否则会被误认为本脚本的选项而报"未知选项"。
 # ============================================================
 
 # 防止直接执行

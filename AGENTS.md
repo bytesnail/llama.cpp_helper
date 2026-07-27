@@ -56,11 +56,12 @@ source run_env.sh        # 加载运行时环境变量（必须 source，直接�
 
 ```
 config.sh   (配置层，纯数据)   ─┐
-common.sh   (工具层，共享函数) ─┤  被下面三个入口脚本 source
+common.sh   (工具层，共享函数) ─┤  被 build.sh / update.sh 两个入口 source
                                │
 build.sh ──┐                   │
-update.sh ─┼── source ─────────┤
-run_env.sh ┘                   │
+update.sh ─┼── source ─────────┘
+run_env.sh ┘── source ── 仅 common.sh（config.sh 的 readonly 变量会灌入
+                          父 shell，版本号经子 shell 提取，见 run_env.sh 注释）
 ```
 
 每个入口脚本的统一骨架：

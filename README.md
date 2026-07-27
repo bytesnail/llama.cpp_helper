@@ -147,8 +147,8 @@ build.sh    ──source──> common.sh
             ──source──> config.sh
 update.sh   ──source──> common.sh
             ──source──> config.sh
-run_env.sh  ──source──> common.sh
-            ──source──> config.sh
+run_env.sh  ──source──> common.sh（仅此一项：config.sh 的 readonly 变量
+                              会灌入父 shell，版本号改经子 shell 提取）
 ```
 
 > 模块分层详见 [AGENTS.md](AGENTS.md#模块分层)。
@@ -210,6 +210,8 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 ```
 
 > **⚠️ 必须使用 `source` 执行**，直接运行 `bash run_env.sh` 会报错退出。`source` 确保变量在当前 shell 中生效。
+
+> **在脚本内 source 时注意**：`source run_env.sh`（不传参）会继承调用者的位置参数（bash source 语义）——父脚本以 `./deploy.sh --verbose` 运行时，`--verbose` 会被误认为本脚本的选项。请先 `set --` 清空位置参数，或显式传参（如 `source run_env.sh --status`）。
 
 `run_env.sh` 设置的变量详见 [运行时环境变量](#运行时环境变量)。
 

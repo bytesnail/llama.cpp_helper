@@ -42,7 +42,8 @@ _show_help() {
     llama_show_help \
         "$(basename "$0")" \
         "将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。" \
-        "  -h, --help      显示此帮助信息
+        "  [tag|commit]    目标版本：release 标签或 7-40 位 commit SHA（缺省=最新 release）
+  -h, --help      显示此帮助信息
       --version   显示版本信息" \
         "  bash update.sh                    # 更新到最新 release
   bash update.sh b8941              # 更新到指定标签
