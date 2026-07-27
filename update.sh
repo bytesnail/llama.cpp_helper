@@ -180,8 +180,13 @@ _cleanup_stale_submodules() {
     local stale_count=0
     local gitlink mod_dir
     # 不深入当前子模块内部：顶层 gitlinks 之外的嵌套子模块 .git 会被误判为残留
+    # ${expected_paths[@]+...} 防护：无 160000 条目（无子模块仓库的常态）时
+    # expected_paths 为空，"${!expected_paths[@]}" 裸展开在 Bash ≤4.3 + set -u
+    # 下报 unbound variable（4.4 才修复，common.sh 空数组防护同款）——函数中止
+    # 被调用点 || true 吞掉，残留清理静默整体跳过。注意防护须以值展开判定
+    # （${arr[@]+...}），"${!arr[@]+...}" 会被 bash 当作间接展开二次求值
     local -a find_prune_args=()
-    for path in "${!expected_paths[@]}"; do
+    for path in ${expected_paths[@]+"${!expected_paths[@]}"}; do
         find_prune_args+=(-path "${LLAMA_CPP_SRC}/${path}" -prune -o)
     done
     while IFS= read -r gitlink; do
@@ -435,10 +440,16 @@ _check_local_repo() {
     # 内层区分退出码：diff --quiet 的 1（有差异）与 >1（错误，如 index
     # 损坏/dubious ownership）不可混为一谈——后者曾一律误报 DIRTY，
     # 用户按指引查 status 却看不到任何改动（已实证）。
+    # 内层脚本必须是 POSIX sh：git submodule foreach 恒用 /bin/sh 执行
+    # （Debian/Ubuntu 为 dash）——bashism `(( rc1 > 1 ))` 会被 dash 解析为
+    # 嵌套子 shell + 重定向 `> 1`：报错被行尾 2>/dev/null 吞掉、两条件
+    # 恒假、守卫静默失效，且在每个子模块根目录遗留名为 1 的垃圾文件
+    # （已实证）。算术比较一律用 [ ] 测试。
     # 内层脚本保持与外层 git -C 同行：test_smoke 的 -C 契约按行检查，
     # foreach 内层裸调用（cwd 由 foreach 自身提供）靠同行放行
     local submodule_status foreach_rc=0
-    submodule_status=$(git -C "$LLAMA_CPP_SRC" submodule foreach --quiet 'git diff --quiet 2>/dev/null; rc1=$?; git diff --cached --quiet 2>/dev/null; rc2=$?; if (( rc1 > 1 || rc2 > 1 )); then echo ERROR; elif (( rc1 != 0 || rc2 != 0 )); then echo DIRTY; fi' 2>/dev/null) || foreach_rc=$?
+    # shellcheck disable=SC2016  # 单引号是刻意的：$rc1/$rc2 须在子模块的 /bin/sh 中求值，而非当前 shell
+    submodule_status=$(git -C "$LLAMA_CPP_SRC" submodule foreach --quiet 'git diff --quiet 2>/dev/null; rc1=$?; git diff --cached --quiet 2>/dev/null; rc2=$?; if [ "$rc1" -gt 1 ] || [ "$rc2" -gt 1 ]; then echo ERROR; elif [ "$rc1" -ne 0 ] || [ "$rc2" -ne 0 ]; then echo DIRTY; fi' 2>/dev/null) || foreach_rc=$?
     # foreach 自身失败（子模块 gitdir 损坏等）同样按检查失败处理——
     # 外层 || true 曾把该失败整体吞掉，脏检查静默通过（已实证）
     if [[ "$foreach_rc" -ne 0 ]] || grep -q 'ERROR' <<< "$submodule_status"; then

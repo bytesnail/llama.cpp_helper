@@ -164,6 +164,34 @@ load test_helper
     [ "$PWD" = "$before_pwd" ]
 }
 
+@test "_check_local_repo rejects dirty submodule when main status ignores submodules" {
+    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+
+    # 主 status 经 diff.ignoreSubmodules=all 放行时，foreach 守卫是唯一防线。
+    # 回归：git submodule foreach 恒用 /bin/sh（Debian/Ubuntu 为 dash）执行
+    # 内层脚本——bashism `(( rc1 > 1 ))` 被 dash 解析为嵌套子 shell + 重定向
+    # `> 1`，两条件恒假、守卫静默失效，并遗留名为 1 的垃圾文件（已实证）。
+    local sub_repo="${TEST_TMPDIR}/sub_src"
+    local fake_repo="${TEST_TMPDIR}/super_repo"
+    mkdir -p "$sub_repo"
+    _init_git_repo "$sub_repo"
+    echo tracked > "$sub_repo/tracked.txt"
+    git -C "$sub_repo" add tracked.txt
+    git -C "$sub_repo" commit -q -m tracked
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    git -C "$fake_repo" -c protocol.file.allow=always submodule add -q "$sub_repo" sub
+    git -C "$fake_repo" commit -q -m add-sub
+    git -C "$fake_repo" config diff.ignoreSubmodules all
+    echo modified >> "$fake_repo/sub/tracked.txt"
+
+    LLAMA_CPP_SRC="$fake_repo" run _check_local_repo
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "子模块中存在未提交的更改" ]]
+    # 垃圾文件断言：dash 把 `(( rc1 > 1 ...` 解析为重定向 `> 1` 的历史 bug
+    [[ ! -e "$fake_repo/sub/1" ]]
+}
+
 @test "_update_source works from an unrelated cwd (git -C everywhere)" {
     _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
 
