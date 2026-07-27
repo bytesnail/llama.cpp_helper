@@ -359,7 +359,9 @@ llama_print_hardware_summary() {
             IFS='|' read -r idx name cc vram <<< "$gpu_line"
             vram_human="?"
             [[ "$vram" =~ ^[0-9]+$ ]] && vram_human=$(llama_human_size $((vram * 1024 * 1024)))
-            llama_detail "  [${idx}] ${name}（sm_${cc}, ${vram_human}）"
+            # compute_cap 输出形如 7.5——CUDA 惯例命名是拼接（sm_75），
+            # 与 CMAKE_CUDA_ARCHITECTURES=75 / build.sh 头注释保持一致
+            llama_detail "  [${idx}] ${name}（sm_${cc/./}, ${vram_human}）"
         done
 
         # NVLink 拓扑：topo -m 矩阵中 GPU 间互联类型，NV# 表示 # 条 NVLink 绑定

@@ -402,7 +402,9 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     echo
     llama_ok "构建完成！"
     echo
-    llama_print_run_examples "${BUILD_DIR}/bin"
+    # BUILD_BIN_DIR（config.sh 单一定义的共享协议，可独立覆盖）——
+    # 与 _verify_build 及 update.sh 的成功摘要保持同一视角
+    llama_print_run_examples "$BUILD_BIN_DIR"
     return 0
 }
 

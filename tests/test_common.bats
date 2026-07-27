@@ -960,9 +960,12 @@ CONDAEOF
     # 回归测试：PCIe-only 多 GPU 系统中 nvidia-smi topo -m 无 NV* 条目，
     # grep 返回 1 → pipefail 下管线失败 → set -e 中止 build.sh。
     # 验证 || true 修复后函数能完成并输出“PCIe 互联”降级路径。
+    # mock 的 compute_cap 用真实输出格式 7.5（非 75）——显示须拼接为
+    # CUDA 惯例 sm_75（与 CMAKE_CUDA_ARCHITECTURES=75 命名一致）
     local mock_dir
-    mock_dir=$(mktemp -d)
-    printf '#!/bin/bash\nif [[ "$*" == *topo* ]]; then printf "\\tGPU0\\tGPU1\\nGPU0\\tX\\tSYS\\nGPU1\\tSYS\\tX\\n"; elif [[ "$*" == *query-gpu* ]]; then printf "0|RTX 2080 Ti|75|11264\\n1|RTX 2080 Ti|75|11264\\n"; else exit 0; fi\n' > "${mock_dir}/nvidia-smi"
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    printf '#!/bin/bash\nif [[ "$*" == *topo* ]]; then printf "\\tGPU0\\tGPU1\\nGPU0\\tX\\tSYS\\nGPU1\\tSYS\\tX\\n"; elif [[ "$*" == *query-gpu* ]]; then printf "0|RTX 2080 Ti|7.5|11264\\n1|RTX 2080 Ti|7.5|11264\\n"; else exit 0; fi\n' > "${mock_dir}/nvidia-smi"
     chmod +x "${mock_dir}/nvidia-smi"
 
     run bash -c "
@@ -973,5 +976,6 @@ CONDAEOF
     "
     [ "$status" -eq 0 ]
     [[ "$output" == *"PCIe"* ]]
-    rm -rf "${mock_dir}"
+    [[ "$output" == *"sm_75"* ]]
+    [[ "$output" != *"sm_7.5"* ]]
 }
