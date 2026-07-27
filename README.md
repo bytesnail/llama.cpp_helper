@@ -362,7 +362,7 @@ CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 cd "$LLAMA_CPP_SRC"
 git log --oneline -5
 git checkout <之前的commit>
-git submodule update --recursive
+git submodule update --init --recursive
 ```
 
 ### 并发执行冲突

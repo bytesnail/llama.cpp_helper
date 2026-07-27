@@ -659,10 +659,13 @@ _print_recovery_steps() {
     llama_detail "  原始版本: $(_short_sha "$current_commit") (${current_tag:-(无标签)})"
     llama_detail "  目标版本: ${release_tag}"
     llama_detail "恢复步骤:"
-    llama_detail "  git -C ${LLAMA_CPP_SRC} status"
-    llama_detail "  git -C ${LLAMA_CPP_SRC} checkout ${current_commit}"
-    llama_detail "  git -C ${LLAMA_CPP_SRC} submodule update --recursive"
-    llama_detail "  bash ${BUILD_SCRIPT}"
+    # 路径加引号：LLAMA_CPP_SRC 含空格时指引须可直接复制执行；
+    # submodule update 带 --init：与 _rollback 对齐——plain update 对
+    # 从未初始化的子模块静默跳过（已实证），照抄会恢复不完全
+    llama_detail "  git -C \"${LLAMA_CPP_SRC}\" status"
+    llama_detail "  git -C \"${LLAMA_CPP_SRC}\" checkout ${current_commit}"
+    llama_detail "  git -C \"${LLAMA_CPP_SRC}\" submodule update --init --recursive"
+    llama_detail "  bash \"${BUILD_SCRIPT}\""
 }
 
 # Usage: _build_with_rollback
@@ -709,7 +712,10 @@ _build_with_rollback() {
         fi
         llama_ok "更新失败但已回滚并重新构建成功"
         _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
-        llama_safe_exit 0
+        # 退出码 2（区别于通用失败 1）：更新事务失败、旧版已恢复可用——
+        # 摘要面向人，退出码面向自动化。exit 0 会让 cron/CI 误判更新成功
+        # 并继续部署（实际运行旧版本）；exit 1 又会掩盖"环境已恢复可用"
+        llama_safe_exit 2
     fi
     # 构建成功——更新事务已提交：解除中断恢复 trap。否则成功摘要打印期间
     # 收到 SIGINT/SIGTERM 会把已完成的更新 _rollback 回旧版本（trap 在

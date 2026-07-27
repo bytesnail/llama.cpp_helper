@@ -111,14 +111,15 @@ load test_helper
     # （含 _print_recovery_steps 打印给用户的恢复指引）都必须显式携带 -C。
     # sed 先剥行尾注释；第一个 grep 找「git 后随空白」的行——.git/config 等
     # 路径组件（后随 / 或 "）与 gitdir:/"git" 等形态天然不匹配；
-    # 第二个 grep 放行紧跟 -C "$LLAMA_CPP_SRC" 的调用。
+    # 第二个 grep 放行紧跟 -C "$LLAMA_CPP_SRC" 的调用——含恢复指引在双引号
+    # 字符串内的转义形态 -C \"${LLAMA_CPP_SRC}\"（空格路径下指引可复制执行）。
     # 已知局限（行级检查）：submodule foreach 的内层 'git diff' 由 foreach 自身
     # 提供 cwd，属合法裸调用，靠同行的外层 git -C 放行。
     local violations
     violations=$(grep -vE '^[[:space:]]*#' "${BATS_TEST_DIRNAME}/../update.sh" \
         | sed 's/[[:space:]]#.*$//' \
         | grep -nE 'git[[:space:]]' \
-        | grep -vE 'git[[:space:]]+-C[[:space:]]+"?\$\{?LLAMA_CPP_SRC\}?"?' || true)
+        | grep -vE 'git[[:space:]]+-C[[:space:]]+\\?"?\$\{?LLAMA_CPP_SRC\}?\\?"?' || true)
     if [ -n "$violations" ]; then
         printf 'bare git invocation(s):\n%s\n' "$violations"
     fi
