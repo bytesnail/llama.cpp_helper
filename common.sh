@@ -637,6 +637,12 @@ llama_check_disk_space() {
         llama_warn "无法获取磁盘空间信息"
         return 0
     fi
+    # 某些文件系统（FUSE/overlay/损坏挂载）df 成功但第 4 列非数字（如 "-"）：
+    # 算术展开在 set -e/-u 下会中止脚本，绕过本函数"不阻塞"契约
+    if [[ ! "$available_kb" =~ ^[0-9]+$ ]]; then
+        llama_warn "无法解析磁盘可用空间: ${available_kb}"
+        return 0
+    fi
 
     local available_gb=$((available_kb / 1024 / 1024))
     llama_detail "磁盘可用空间: ${available_gb}GB (要求: ${min_gb}GB)"

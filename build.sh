@@ -76,7 +76,10 @@ _detect_cuda_lib_dir() {
     cuda_lib_dir="${nvcc_dir}/targets/$(uname -m)-linux/lib"
     if [[ ! -d "$cuda_lib_dir" ]]; then
         local cuda_rt max_search_depth=6
-        cuda_rt=$(find "$nvcc_dir" -maxdepth "$max_search_depth" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null)
+        # || true 保护降级路径：find 遇遍历错误（子目录权限拒绝）会返回非零，
+        # set -euo pipefail 下会在此中止整个 build.sh，使函数设计的 return 1
+        # 与调用点 if/else 降级分支（见行 ~314）永远无法到达。参考反模式 8。
+        cuda_rt=$(find "$nvcc_dir" -maxdepth "$max_search_depth" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null || true)
         if [[ -n "$cuda_rt" ]]; then
             cuda_lib_dir=$(dirname "$(readlink -f "$cuda_rt")")
         fi
