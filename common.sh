@@ -482,14 +482,21 @@ llama_activate_conda() {
     fi
 
     # 恢复之前的 shell 选项（仅恢复本函数改动的 e/u）
-    if ((restore_u)); then set -u; fi
-    if ((restore_e)); then set -e; fi
+    # 对称恢复：原本开启的重新开启；原本关闭的强制关闭——既精确还原调用者
+    # 原状（函数内部曾 set +e/+u 容忍 conda 失败），又防止被 source 的
+    # conda.sh/profile.d 脚本新启用的 -e/-u 泄漏（如 source run_env.sh 的父
+    # shell，其按设计不启用 errexit）
+    if ((restore_u)); then set -u; else set +u; fi
+    if ((restore_e)); then set -e; else set +e; fi
 
     return 0
 }
 
 # --- 文件锁 --------------------------------------------------
-# 使用动态文件描述符（自动 FD_CLOEXEC），防止子进程继承锁
+# 动态文件描述符（exec {fd}>>）：bash 不会为此自动设置 FD_CLOEXEC，故
+# fork 出的子进程（ninja/gcc 等）会继承该 fd。正常运行无害——本进程退出
+# （含经 trap 清理的信号）时 fd 关闭、锁随即释放；仅当本进程被 SIGKILL/
+# OOM-kill 而 fork 的子进程仍幸存时，锁可能延迟至孤儿退出才释放。
 
 # Usage: _lock_grab <lock_file>
 # 打开锁文件、非阻塞 flock、写入持有者 PID。
