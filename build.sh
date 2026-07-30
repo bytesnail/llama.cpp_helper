@@ -398,6 +398,10 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     else
         llama_warn "无法读取源码 commit，跳过构建标记"
     fi
+    # 构建已验证通过且 stamp 写入——事务已提交：解除信号 trap。否则成功
+    # 摘要打印期间收到 SIGINT/SIGTERM 会触发 _cleanup_on_exit（传入 130/143），
+    # 删除刚刚成功的构建（与 update.sh:720 "成功事务不可被信号撤销"对齐）
+    llama_cleanup_trap
     echo
     llama_ok "构建完成！"
     echo

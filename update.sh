@@ -684,6 +684,15 @@ _build_with_rollback() {
     local build_status
     llama_run_silent build_status bash "$BUILD_SCRIPT"
 
+    # build.sh 已退出：若构建成功，事务核心（源码已切到新版本 + 构建通过）已
+    # 提交，立即解除中断 trap——否则下方到 _print_success_summary 前的窗口期
+    # SIGINT 会经 _cleanup_on_interrupt 回滚源码，而 build 产物/stamp 仍为新
+    # 版本，造成源码 HEAD 与 stamp 不一致（下次 check_build_health 误判）。
+    # 失败路径（build_status!=0）保持武装，进入下方回滚分支（723 处亦解除）
+    if [[ "$build_status" -eq 0 ]]; then
+        llama_cleanup_trap
+    fi
+
     # 更新前的版本优先使用 tag，获取不到时回退到 commit id
     local before_ver="${current_tag:-$(_short_sha "$current_commit")}"
 
@@ -710,6 +719,9 @@ _build_with_rollback() {
             _print_recovery_steps
             llama_die "回滚后构建也失败，请手动恢复到 $(_short_sha "$current_commit") 后重试"
         fi
+        # 已回滚并重建成功——环境恢复可用，视同成功事务：解除信号 trap，
+        # 避免摘要打印期间 SIGINT 触发 _cleanup_on_interrupt 再次回滚（与 723 对称）
+        llama_cleanup_trap
         llama_ok "更新失败但已回滚并重新构建成功"
         _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
         # 退出码 2（区别于通用失败 1）：更新事务失败、旧版已恢复可用——
