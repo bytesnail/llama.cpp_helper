@@ -429,7 +429,9 @@ _check_local_repo() {
     fi
     if [[ -n "$porcelain" ]]; then
         llama_err "检测到未提交的更改，请先处理后再更新:"
-        git -C "$LLAMA_CPP_SRC" status --short --untracked-files=no
+        # 复用上方已捕获的 $porcelain（--porcelain 与 --short 输出等价），
+        # 避免对同一状态再 fork 一次 git status
+        printf '%s\n' "$porcelain"
         llama_die "存在未提交的更改，请先处理后再更新"
     fi
 
@@ -720,7 +722,7 @@ _build_with_rollback() {
             llama_die "回滚后构建也失败，请手动恢复到 $(_short_sha "$current_commit") 后重试"
         fi
         # 已回滚并重建成功——环境恢复可用，视同成功事务：解除信号 trap，
-        # 避免摘要打印期间 SIGINT 触发 _cleanup_on_interrupt 再次回滚（与 723 对称）
+        # 避免摘要打印期间 SIGINT 触发 _cleanup_on_interrupt 再次回滚（与 693 对称）
         llama_cleanup_trap
         llama_ok "更新失败但已回滚并重新构建成功"
         _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
@@ -729,10 +731,8 @@ _build_with_rollback() {
         # 并继续部署（实际运行旧版本）；exit 1 又会掩盖"环境已恢复可用"
         llama_safe_exit 2
     fi
-    # 构建成功——更新事务已提交：解除中断恢复 trap。否则成功摘要打印期间
-    # 收到 SIGINT/SIGTERM 会把已完成的更新 _rollback 回旧版本（trap 在
-    # _check_local_repo 注册后全程有效，本路径此前从不解除）
-    llama_cleanup_trap
+    # 成功路径的中断 trap 已在上方 693 处解除（build_status==0 分支）；失败
+    # 路径经上方 die/safe_exit 退出，均不可达此处，故无需重复解除
     _print_success_summary "${need_source_update}" "${before_ver}" "${release_tag}" "${release_date:-}"
 
     return 0

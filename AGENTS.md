@@ -113,7 +113,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 `LOCK_FD` 是主要的跨模块可变状态例外：由 `common.sh` 函数设置和读取，多处访问（含各脚本和测试 teardown），保留 `UPPER_SNAKE_CASE` 以突出其跨模块可见性。
 
 其他跨模块变量例外：
-- `incremental`、`_CLEANUP_DONE` 和 `_BUILD_TOUCHED`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。
+- `incremental`、`_CLEANUP_DONE`、`_BUILD_TOUCHED` 和 `_BUILD_COMMITTED`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。其中 `_BUILD_COMMITTED` 在构建成功后置位，使 `_cleanup_on_exit` 的删除条件结构性短路（不依赖 EXIT trap 上 `$?==0` 这一非保证），保护已提交构建不被信号路径误删。
 - `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
 - `update.sh` 的更新会话状态 7 个脚本级全局（`current_commit`、`current_tag`、`current_branch`、`release_tag`、`release_date`、`need_source_update`、`skip_update`）：写入面已收敛为 3 个具名入口——`_session_capture_current`（从 git 捕获更新前状态）、`_session_set_target`（记录目标版本）、`_resolve_target`（更新决策，两态显式写保证可重入）；跨函数读取的性质不变，故仍用 `lowercase_snake_case` 脚本级变量。短 SHA 由 `_short_sha` 现算（derive-don't-store，原 `current_short`/`release_short` 已消除），其余函数间数据经参数/返回值传递（`target_version` 是 `main` 局部，经 `_parse_args` out-param 与 `_resolve_target` 参数传递；release 查询经 `_fetch_latest_release` seam 返回 TAB 行）。写入面不变量由 `tests/test_smoke.bats` 三个契约测试钉住（顶格赋值清单、已消除名字消失、函数体外无会话全局赋值）。
 

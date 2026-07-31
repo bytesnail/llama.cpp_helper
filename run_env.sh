@@ -30,25 +30,25 @@ _LLAMA_RUN_ENV_SOURCED=1
 # 引导：查找并 source common.sh（共享辅助函数尚不可用）
 # 颜色变量由 common.sh 统一管理（_LLAMA_COLOR_VARS 为单一来源）；
 # 退出时由 llama_restore_colors 清理，不污染父 shell。
-boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-if [[ ! -f "${boot_dir}/common.sh" ]]; then
+_llama_boot_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+if [[ ! -f "${_llama_boot_dir}/common.sh" ]]; then
     # shellcheck disable=SC2317
-    echo "[ERROR] 未找到 common.sh: ${boot_dir}/common.sh" >&2
-    unset boot_dir
+    echo "[ERROR] 未找到 common.sh: ${_llama_boot_dir}/common.sh" >&2
+    unset _llama_boot_dir
     return 1 2>/dev/null || exit 1
 fi
 # shellcheck source=/dev/null
-source "${boot_dir}/common.sh"
+source "${_llama_boot_dir}/common.sh"
 
 # 版本号（供 llama_show_version 使用）经子 shell 提取：直接 source config.sh
 # 会把其 readonly 变量/数组（REPO/LOCK_FILE/LLAMA_CMAKE_KNOBS 等约 20 个）
 # 灌入父 shell——readonly 无法 unset，用户后续同名赋值直接报"只读变量"
 # （已实证）。同理本脚本不调用 llama_init_script_dir：不需要 SCRIPT_DIR，
 # 避免覆写父 shell 的同名变量（dotfiles 常用名）。
-if [[ -f "${boot_dir}/config.sh" ]]; then
-    LLAMA_HELPER_VERSION=$(bash -c 'source "$1/config.sh" 2>/dev/null; printf %s "${LLAMA_HELPER_VERSION:-unknown}"' _ "$boot_dir")
+if [[ -f "${_llama_boot_dir}/config.sh" ]]; then
+    LLAMA_HELPER_VERSION=$(bash -c 'source "$1/config.sh" 2>/dev/null; printf %s "${LLAMA_HELPER_VERSION:-unknown}"' _ "$_llama_boot_dir")
 fi
-unset boot_dir
+unset _llama_boot_dir
 
 # --- 环境变量定义 --------------------------------------------
 # 使用关联数组定义所有要设置的环境变量

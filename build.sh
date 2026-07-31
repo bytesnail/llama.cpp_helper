@@ -33,7 +33,10 @@ _cleanup_on_exit() {
     _CLEANUP_DONE=1
     # 仅当本次运行确实进入重建流程（_BUILD_TOUCHED）后才清理构建目录；
     # 否则参数错误/前置检查失败等早期退出会误删上一次成功的构建产物。
-    if [[ "${_BUILD_TOUCHED:-0}" -eq 1 && "${incremental:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
+    # _BUILD_COMMITTED：构建成功后显式置位——即便 EXIT trap 因信号路径上
+    # $? 偶非零而被触发，删除条件亦据此短路，保护已提交事务（不依赖 $?==0
+    # 这一非结构保证，见下方 407 处说明）。
+    if [[ "${_BUILD_TOUCHED:-0}" -eq 1 && "${_BUILD_COMMITTED:-0}" -ne 1 && "${incremental:-0}" -eq 0 && "$exit_code" -ne 0 && -d "${BUILD_DIR:-}" ]]; then
         llama_warn "清理未完成的构建目录..."
         rm -rf "$BUILD_DIR"
     fi
@@ -401,9 +404,13 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     else
         llama_warn "无法读取源码 commit，跳过构建标记"
     fi
-    # 构建已验证通过且 stamp 写入——事务已提交：解除信号 trap。否则成功
-    # 摘要打印期间收到 SIGINT/SIGTERM 会触发 _cleanup_on_exit（传入 130/143），
-    # 删除刚刚成功的构建（与 update.sh:720 "成功事务不可被信号撤销"对齐）
+    # 构建已验证通过且 stamp 写入——事务已提交。双保险防止摘要打印期间
+    # SIGINT/SIGTERM 撤销已提交事务（与 update.sh "成功事务不可被信号撤销"对齐）：
+    #   - _BUILD_COMMITTED=1：使 _cleanup_on_exit 的删除条件结构性短路，不依赖
+    #     EXIT trap 上 $? 偶为 0 这一非保证（信号路径 $? 因 bash 版本/上下文而异）
+    #   - llama_cleanup_trap：解除 SIGINT/SIGTERM trap，阻止 _cleanup_on_exit 被显式
+    #     传入 130/143（否则即便不删目录也会以非零退出码谎报失败）
+    _BUILD_COMMITTED=1
     llama_cleanup_trap
     echo
     llama_ok "构建完成！"

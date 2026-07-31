@@ -348,7 +348,10 @@ llama_print_hardware_summary() {
             llama_warn "nvidia-smi 存在但执行失败（退出码: ${smi_rc}）——驱动异常？GPU 信息不可用"
         else
             # 参数扩展替代 sed（csv 的 ", " → 字段分隔符 "|"）
-            mapfile -t gpu_lines <<< "${smi_out//, /|}"
+            # 仅非空才 mapfile：here-string 恒附加换行，空 smi_out 会让 mapfile
+            # 得到 1 个幻影空元素（gpu_count 误为 1），打印 "GPU（1 块）" + 空字段
+            # （nvidia-smi 退出码 0 但无 stdout 的驱动异常边缘情形，已实证）
+            [[ -n "$smi_out" ]] && mapfile -t gpu_lines <<< "${smi_out//, /|}"
         fi
     fi
     local gpu_count=${#gpu_lines[@]}
@@ -767,9 +770,7 @@ llama_human_size() {
     if ((bytes >= _LLAMA_BYTES_GIB)); then
         local gb=$((bytes / _LLAMA_BYTES_GIB))
         local frac=$(( (bytes % _LLAMA_BYTES_GIB) * 100 / _LLAMA_BYTES_GIB ))
-        local frac_str
-        printf -v frac_str '%02d' "$frac"
-        echo "${gb}.${frac_str}GiB"
+        printf '%d.%02dGiB\n' "$gb" "$frac"
     elif ((bytes >= _LLAMA_BYTES_MIB)); then
         echo "$((bytes / _LLAMA_BYTES_MIB))MiB"
     elif ((bytes >= _LLAMA_BYTES_KIB)); then

@@ -972,3 +972,26 @@ CONDAEOF
     [[ "$output" == *"sm_75"* ]]
     [[ "$output" != *"sm_7.5"* ]]
 }
+
+@test "llama_print_hardware_summary handles nvidia-smi empty success without phantom GPU" {
+    # 回归测试：nvidia-smi 退出码 0 但 stdout 为空（驱动异常边缘情形）。
+    # 修复前 mapfile <<< "" 因 here-string 恒附换行产生 1 个幻影空元素，
+    # gpu_count 误为 1，打印 "GPU（1 块）" + 空字段 "  [] （sm_, ?）"。
+    # 修复后（[[ -n "$smi_out" ]] 守卫）应降级为 "未检测到 NVIDIA GPU"。
+    local mock_dir
+    mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    printf '#!/bin/bash\nexit 0\n' > "${mock_dir}/nvidia-smi"
+    chmod +x "${mock_dir}/nvidia-smi"
+
+    run bash -c "
+        set -euo pipefail
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        PATH='${mock_dir}:$PATH'
+        llama_print_hardware_summary
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"未检测到 NVIDIA GPU"* ]]
+    [[ "$output" != *"GPU（1 块）"* ]]
+    [[ "$output" != *"sm_"* ]]
+}
