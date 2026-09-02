@@ -909,3 +909,9 @@ MOCK_EOF
     [ "$status" -ne 0 ]
     [[ ! -e "${TEST_TMPDIR}/fail_empty" ]]
 }
+
+@test "update.sh --help mentions auto-clone on missing source" {
+    run bash "${BATS_TEST_DIRNAME}/../update.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "克隆" ]]
+}

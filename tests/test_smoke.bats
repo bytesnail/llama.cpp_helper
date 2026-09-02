@@ -205,3 +205,15 @@ load test_helper
     ' "${BATS_TEST_DIRNAME}/../update.sh")
     [ -z "$violations" ] || { echo "$violations"; return 1; }
 }
+
+@test "update.sh main calls _ensure_source_repo before _normalize_src_path" {
+    # 自动克隆必须在路径解析之前：_normalize_src_path 对缺失目录 die，
+    # 顺序颠倒会使首次安装场景永远无法到达 clone
+    local body ensure_line normalize_line
+    body=$(sed -n '/^main()/,/^}/p' "${BATS_TEST_DIRNAME}/../update.sh")
+    ensure_line=$(grep -n '^[[:space:]]*_ensure_source_repo' <<< "$body" | head -1 | cut -d: -f1)
+    normalize_line=$(grep -n '^[[:space:]]*_normalize_src_path' <<< "$body" | head -1 | cut -d: -f1)
+    [ -n "$ensure_line" ]
+    [ -n "$normalize_line" ]
+    [ "$ensure_line" -lt "$normalize_line" ]
+}

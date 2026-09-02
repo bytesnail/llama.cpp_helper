@@ -41,7 +41,7 @@ skip_update=0
 _show_help() {
     llama_show_help \
         "$(basename "$0")" \
-        "将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。" \
+        "将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。源码目录不存在/为空时自动从 GitHub 克隆（首次使用）。" \
         "  [tag|commit]    目标版本：release 标签或 7-40 位 commit SHA（缺省=最新 release）
   -h, --help      显示此帮助信息
       --version   显示版本信息" \
@@ -884,6 +884,7 @@ main() {
     # 文件锁在参数解析之后获取（--help/--version 不受锁占用影响）
     llama_acquire_lock || llama_die "无法获取文件锁"
     llama_activate_conda  # 激活 conda 环境（确保 python3/git 等可用）
+    _ensure_source_repo   # 首次使用：目录缺失/为空时自动克隆（持锁状态下）
     _normalize_src_path
     _check_local_repo
     _resolve_target "$target_version"
