@@ -273,7 +273,7 @@ LLAMA_CPP_SRC="/your/path/to/llama.cpp" bash build.sh
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `CONDA_AUTO_ACTIVATE` | `1` | 自动激活 conda 环境（0=跳过, 1=自动激活） |
-| `CONDA_ENV_NAME` | `base` | 激活的 conda 环境名称 |
+| `CONDA_ENV_NAME` | `base` | 激活的 conda 环境名称（权威：当前激活其他环境时强制切换；环境不存在/激活失败时 build.sh/update.sh 报错中止） |
 
 ```bash
 # 跳过 conda 自动激活

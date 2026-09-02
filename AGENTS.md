@@ -140,6 +140,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 - **信号处理**：`llama_setup_trap <cmd>` 注册 SIGINT/SIGTERM；`llama_cleanup_trap` 重置。`build.sh` 的信号 trap 显式传入退出码（`trap '_cleanup_on_exit 130' SIGINT`）——信号在 builtin 间隙到达时 `$?` 可能为 0，会跳过清理并以 0 退出（下游误判构建成功）
 - **命令包装**：`llama_run_silent <rc_var> <cmd...>` 临时禁用 `set -e` 运行命令并捕获输出——**恒返回 0**，退出码经 `printf -v` 写入 `<rc_var>`（必写，`set -u` 下读取安全）；调用点先 `local` 声明该变量（动态作用域下 `printf -v` 才会写入局部变量），再读取它决定失败响应（die/回滚）。误用（缺/非法变量名、保留前缀 `_lrs_`、缺命令）返回 2 大声失败——与被包装命令的失败是两类
 - **保存/恢复 errexit 必须用 `$-`**：绝不能用 `prev_opts=$(set +o)` 保存 shell 选项——bash 默认在命令替换子 shell 中重置 errexit（`shopt inherit_errexit` 默认 off），捕获到的恒为 `set +o errexit`，`eval` 恢复后会把调用者的 `set -e` 永久静默关闭。正确写法：`if [[ $- == *e* ]]; then restore_e=1; fi`（`$-` 在当前 shell 读取，`||`/`if` 豁免上下文中仍正确）。参考 `llama_run_silent`、`llama_activate_conda`
+- **conda 环境选择**：`llama_activate_conda` 中 `CONDA_ENV_NAME` 恒为权威——当前激活其他环境时强制切换；已定位 conda 但激活失败返回 1（`build.sh`/`update.sh` 的裸调用在 `set -e` 下中止；`run_env.sh` 打印错误后继续，不杀父 shell）；找不到 conda 安装才软跳过。判断"已在目标环境"必须用 `CONDA_DEFAULT_ENV`——base 的 `CONDA_PREFIX` 是安装根，basename 不是 `base`
 - **管线赋值防护**：`var=$(cmd | cmd)` 在 `set -euo pipefail` 下，若管线可能返回非零（如 `grep` 无匹配、外部工具缺失），必须加 `|| true`——否则会中止脚本，使文档承诺的优雅降级路径（空串/0/回退）无法到达。参考 `common.sh` 中 `_llama_lscpu_field`、`llama_print_hardware_summary`、`llama_hw_cpu_*` 的实现
 - **测试提取模式**：`_LLAMA_SOURCE_ONLY=1` 允许测试 source 入口脚本时跳过锁获取和 trap 注册等副作用
 

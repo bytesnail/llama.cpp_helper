@@ -75,7 +75,7 @@ declare -ar LLAMA_CMAKE_KNOBS=(
 
 # --- conda 配置 ----------------------------------------------
 CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境名称
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境名称（权威：已激活其他环境时强制切换；激活失败 build.sh/update.sh 报错中止）
 
 # --- 网络超时配置（可通过环境变量覆盖） -----------------------
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # 秒；update.sh HTTP 连接超时
