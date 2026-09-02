@@ -35,6 +35,11 @@ _init_git_repo() {
     git -C "$repo" init -q
     git -C "$repo" config user.email "test@test.test"
     git -C "$repo" config user.name "Test"
+    # 沙盒仓局部关闭签名：全局 tag.gpgsign=true 会使 git tag 转为带签名
+    # 附注标签（需要说明/交互）而在 bats 中非交互失败——与身份同理，
+    # 全局配置不得泄漏进测试仓（commit.gpgsign 一并关闭，测试仓永不签名）
+    git -C "$repo" config tag.gpgsign false
+    git -C "$repo" config commit.gpgsign false
     git -C "$repo" commit --allow-empty -q -m "test-init"
 }
 
