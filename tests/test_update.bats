@@ -59,14 +59,14 @@ load test_helper
     git -C "${fake_repo}" checkout -q -b test-branch
 
     # Source update.sh in test-only mode to load _session_capture_current
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
     LLAMA_CPP_SRC="${fake_repo}"
     _session_capture_current
     [ "$current_branch" = "test-branch" ]
 }
 
 @test "_print_success_summary outputs expected format" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # SCRIPT_DIR 已由 update.sh 顶层设置（readonly），llama_print_run_examples 直接使用
 
@@ -77,7 +77,7 @@ load test_helper
 }
 
 @test "_cleanup_stale_submodules handles no stale entries cleanly" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # Create a minimal git repo with a .gitmodules file (no stale entries)
     local fake_repo="${TEST_TMPDIR}/clean_repo"
@@ -96,7 +96,7 @@ load test_helper
 
 
 @test "_cleanup_stale_submodules removes stale submodule with gitdir ref" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local fake_repo="${TEST_TMPDIR}/stale_repo"
     mkdir -p "$fake_repo"
@@ -121,7 +121,7 @@ load test_helper
 }
 
 @test "_cleanup_stale_submodules spares untracked git worktrees" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # 树内未跟踪 worktree：.git 文件的 gitdir 指向 .git/worktrees/，
     # 不是子模块残留——预检查（--untracked-files=no）显式放行的
@@ -139,7 +139,7 @@ load test_helper
 }
 
 @test "_cleanup_stale_submodules refuses to delete when git index unreadable" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # 非 git 目录 + 伪造 gitdir 子模块：ls-files 失败时白名单构建必须
     # 失败并保守不删除（此前进程替换吞错→空白名单→全部误判为残留）
@@ -156,7 +156,7 @@ load test_helper
 # --- C3：无 cwd 环境契约（所有 git 调用显式 -C）---
 
 @test "_check_local_repo does not change the caller's working directory" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local before_pwd="$PWD"
     LLAMA_CPP_SRC="${TEST_TMPDIR}/llama.cpp"
@@ -165,7 +165,7 @@ load test_helper
 }
 
 @test "_check_local_repo rejects dirty submodule when main status ignores submodules" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # 主 status 经 diff.ignoreSubmodules=all 放行时，foreach 守卫是唯一防线。
     # 回归：git submodule foreach 恒用 /bin/sh（Debian/Ubuntu 为 dash）执行
@@ -192,8 +192,38 @@ load test_helper
     [[ ! -e "$fake_repo/sub/1" ]]
 }
 
+@test "_check_local_repo tolerates git status warning on stderr with clean tree" {
+    _load_update
+
+    # 回归：git 退出码 0 但向 stderr 打警告（如 core.excludesFile 不可读）
+    # 时，脏检查载荷经 2>&1 并入 stderr——干净工作区曾被误判为"存在未
+    # 提交的更改"而硬阻断更新（已实证）。stderr 须单独捕获，仅作警告展示
+    local fake_repo="${TEST_TMPDIR}/clean_repo"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+
+    # mock git：委托真 git，仅在 status --porcelain 时向 stderr 注入警告
+    local mock_dir="${TEST_TMPDIR}/mockbin"
+    mkdir -p "$mock_dir"
+    local real_git
+    real_git=$(command -v git)
+    cat > "${mock_dir}/git" <<MOCK_GIT_EOF
+#!/bin/bash
+if [[ "\$*" == *"status --porcelain"* ]]; then
+    echo "warning: unable to access '/nonexistent/.config/git/ignore': Permission denied" >&2
+fi
+exec ${real_git} "\$@"
+MOCK_GIT_EOF
+    chmod +x "${mock_dir}/git"
+
+    LLAMA_CPP_SRC="$fake_repo" PATH="${mock_dir}:$PATH" run _check_local_repo
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Git status 输出了警告" ]]
+    [[ "$output" =~ "本地仓库状态正常" ]]
+}
+
 @test "_update_source works from an unrelated cwd (git -C everywhere)" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # 源仓库：含本地标签 b4000；origin 指向本地 bare 克隆（离线可 fetch）
     local fake_repo="${TEST_TMPDIR}/src_repo"
@@ -217,8 +247,36 @@ load test_helper
     [[ "$output" =~ "源码已更新到 b4000" ]]
 }
 
+@test "_update_source with full-SHA target at tagged commit does not warn tag mismatch" {
+    # 回归：release_tag 为 commit SHA 时与 actual_tag（commit 上的真实标签）
+    # 比较必然不等，曾对完全正确的 checkout 误报「标签不一致」
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/src_repo"
+    local origin_repo="${TEST_TMPDIR}/origin.git"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    git -C "$fake_repo" tag b4000
+    local full_sha
+    full_sha=$(git -C "$fake_repo" rev-parse HEAD)
+    git clone -q --bare "$fake_repo" "$origin_repo"
+    git -C "$fake_repo" remote add origin "$origin_repo"
+    # 离开该 commit，制造真实切换
+    git -C "$fake_repo" checkout -q -b work
+    git -C "$fake_repo" commit --allow-empty -q -m "other"
+
+    LLAMA_CPP_SRC="$fake_repo"
+    _session_capture_current
+    _session_set_target "$full_sha" ""
+
+    run _update_source
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "源码已更新到" ]]
+    [[ "$output" != *"标签不一致"* ]]
+}
+
 @test "_update_source accepts a short commit SHA (7-40 hex)" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # 短 SHA（非 tag、非 40 位）此前被 llama_is_full_commit_sha 挡在
     # 通用 rev 解析之外，die"本地找不到目标版本"——与 help 文案
@@ -246,8 +304,59 @@ load test_helper
     [ "$(git -C "$fake_repo" rev-parse HEAD)" = "$target_sha" ]
 }
 
+@test "_update_source rolls back when post-checkout rev-parse fails" {
+    _load_update
+
+    # 回归：checkout 成功后 rev-parse HEAD 失败曾直接 die 不回滚——留下
+    # "已切换、未构建"的半成品状态，与相邻失败路径（checkout 失败/
+    # 子模块失败均先 _rollback）的事务语义不一致
+    local fake_repo="${TEST_TMPDIR}/src_repo"
+    local origin_repo="${TEST_TMPDIR}/origin.git"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    local original_head
+    original_head=$(git -C "$fake_repo" rev-parse HEAD)
+    git -C "$fake_repo" commit --allow-empty -q -m "second"
+    git -C "$fake_repo" tag b4000
+    git clone -q --bare "$fake_repo" "$origin_repo"
+    git -C "$fake_repo" remote add origin "$origin_repo"
+    # 回到原始 commit（detached），使 checkout b4000 确实发生切换
+    git -C "$fake_repo" checkout -q "$original_head"
+
+    # stateful mock git：fetch/标签解析等委托真 git；checkout 后（标记文件
+    # 存在）的 rev-parse HEAD 模拟仓库损坏（exit 128）
+    local mock_dir="${TEST_TMPDIR}/mockbin"
+    local marker="${TEST_TMPDIR}/checked_out_marker"
+    mkdir -p "$mock_dir"
+    local real_git
+    real_git=$(command -v git)
+    cat > "${mock_dir}/git" <<MOCK_GIT_EOF
+#!/bin/bash
+for _a in "\$@"; do
+    if [[ "\$_a" == "checkout" ]]; then : > "${marker}"; fi
+done
+if [[ -f "${marker}" && "\$*" == *"rev-parse HEAD"* ]]; then
+    echo "fatal: simulated post-checkout corruption" >&2
+    exit 128
+fi
+exec ${real_git} "\$@"
+MOCK_GIT_EOF
+    chmod +x "${mock_dir}/git"
+
+    # 会话捕获在 mock 介入前的 test shell 中进行（marker 不存在，git 正常）
+    LLAMA_CPP_SRC="$fake_repo"
+    _session_capture_current
+    _session_set_target "b4000" ""
+
+    PATH="${mock_dir}:$PATH" run _update_source
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "无法读取 checkout 后的 HEAD commit" ]]
+    # 事务语义核心断言：失败后源码树已回滚到更新前 commit
+    [ "$(git -C "$fake_repo" rev-parse HEAD)" = "$original_head" ]
+}
+
 @test "_session_capture_current captures empty branch when detached HEAD" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local fake_repo="${TEST_TMPDIR}/detached_repo"
     mkdir -p "$fake_repo"
@@ -264,7 +373,7 @@ load test_helper
 }
 
 @test "_print_success_summary with source_updated=0 shows rebuild message" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
     # SCRIPT_DIR 已由 update.sh 顶层设置（readonly）
 
     run _print_success_summary 0 "abc1234" "b4000" ""
@@ -273,7 +382,7 @@ load test_helper
 }
 
 @test "_rollback restores previous commit with fake repo" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local fake_repo="${TEST_TMPDIR}/rollback_test"
     mkdir -p "$fake_repo"
@@ -322,7 +431,7 @@ load test_helper
 # --- _short_sha 派生函数（C4：derive-don't-store）---
 
 @test "_short_sha prints first 7 chars of a full SHA" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     run _short_sha "abc1234567890abcdef1234567890abcdef12"
     [ "$status" -eq 0 ]
@@ -330,7 +439,7 @@ load test_helper
 }
 
 @test "_short_sha returns empty string for empty input" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     run _short_sha ""
     [ "$status" -eq 0 ]
@@ -338,7 +447,7 @@ load test_helper
 }
 
 @test "_short_sha returns short input unchanged" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     run _short_sha "abc"
     [ "$status" -eq 0 ]
@@ -348,7 +457,7 @@ load test_helper
 # --- 具名写入口（C4）---
 
 @test "_session_set_target writes release_tag and release_date" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     _session_set_target "b4000" "2026-01-15T10:30:00Z"
     [ "$release_tag" = "b4000" ]
@@ -362,7 +471,7 @@ load test_helper
 # --- _parse_args out-param（C4：target_version 参数化）---
 
 @test "_parse_args writes target version via out-param" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local target=""
     _parse_args target "b4000"
@@ -370,7 +479,7 @@ load test_helper
 }
 
 @test "_parse_args writes empty target when no args" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local target="stale"
     _parse_args target
@@ -378,7 +487,7 @@ load test_helper
 }
 
 @test "_parse_args rejects invalid out-param names" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # 保留前缀（函数内部局部变量命名空间）与非标识符名均拒绝（C1 防呆模式）
     run _parse_args "_pa_reserved" b4000
@@ -390,7 +499,7 @@ load test_helper
 # --- _resolve_target 单元测试 ---
 
 @test "_resolve_target: user-specified target version (full commit SHA)" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
     local full_sha
@@ -413,7 +522,7 @@ load test_helper
 }
 
 @test "_resolve_target: user-specified target version (tag name)" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
@@ -426,7 +535,7 @@ load test_helper
 }
 
 @test "_resolve_target: already on target tag → no source update needed" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local fake_repo="${TEST_TMPDIR}/llama.cpp"
     git -C "$fake_repo" tag b4000 HEAD
@@ -443,8 +552,29 @@ load test_helper
     [ "$need_source_update" -eq 0 ]
 }
 
+@test "_resolve_target: already on user-specified short SHA → no source update needed" {
+    # 回归：短 SHA（7-39 位 hex）用户输入此前因 40 位门槛永不写入
+    # rel_commit，「已是目标 commit」短路对该类输入是死代码——已在该
+    # commit 上运行时仍全量 fetch+checkout+完整重建
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    local short_sha
+    short_sha=$(git -C "$fake_repo" rev-parse --short=7 HEAD)
+
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/gh" "exit 1"
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
+
+    _session_capture_current
+    _resolve_target "$short_sha" > /dev/null
+    [ "$need_source_update" -eq 0 ]
+}
+
 @test "_resolve_target: different version → need update" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
@@ -458,7 +588,7 @@ load test_helper
 }
 
 @test "_resolve_target always writes both decision flags (reentrant)" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     local mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
@@ -476,7 +606,7 @@ load test_helper
 }
 
 @test "_resolve_target: fetch path parses TAB line into release globals" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"
+    _load_update
 
     # stub gh（auth 成功 + release view 输出 JSON），经 PATH 前置生效
     local mock_dir="${TEST_TMPDIR}/mock"
@@ -508,7 +638,7 @@ MOCK_EOF
 # （选择日志走 stderr）。
 
 @test "_fetch_latest_release_gh outputs TAB-separated release line" {
-    local mock_dir inner
+    local mock_dir
     mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
@@ -517,21 +647,13 @@ printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
 
-    inner="${mock_dir}/test_inner.sh"
-    {
-        echo "#!/bin/bash"
-        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
-        echo "PATH='${mock_dir}:$PATH'"
-        echo '_fetch_latest_release_gh'
-    } > "$inner"
-
-    run bash "$inner"
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_gh'
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
 }
 
 @test "_fetch_latest_release_gh writes no release_* globals" {
-    local mock_dir inner
+    local mock_dir
     mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
@@ -540,22 +662,12 @@ printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
 
-    inner="${mock_dir}/test_inner.sh"
-    {
-        echo "#!/bin/bash"
-        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
-        echo "PATH='${mock_dir}:$PATH'"
-        cat << 'INNER_EOF'
-release_tag=""; release_commit=""; release_date=""; release_url=""
+    _run_fetch_with_path "$mock_dir" 'release_tag=""; release_commit=""; release_date=""; release_url=""
 _fetch_latest_release_gh >/dev/null
 echo "tag=[${release_tag}]"
 echo "commit=[${release_commit}]"
 echo "date=[${release_date}]"
-echo "url=[${release_url}]"
-INNER_EOF
-    } > "$inner"
-
-    run bash "$inner"
+echo "url=[${release_url}]"'
     [ "$status" -eq 0 ]
     [[ "$output" == *"tag=[]"* ]]
     [[ "$output" == *"commit=[]"* ]]
@@ -564,20 +676,12 @@ INNER_EOF
 }
 
 @test "_fetch_latest_release_curl outputs TAB-separated release line" {
-    local mock_dir inner
+    local mock_dir
     mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
     # mock curl：解析 -o 参数写入 mock JSON，输出 HTTP 200
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 200 '{"tag_name":"b4001","target_commitish":"def9876543210abcdef9876543210abcdef98","published_at":"2026-02-20T08:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4001"}')"
-
-    inner="${mock_dir}/test_inner.sh"
-    {
-        echo "#!/bin/bash"
-        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
-        echo "PATH='${mock_dir}:$PATH'"
-        echo '_fetch_latest_release_curl'
-    } > "$inner"
 
     # 隔离 TMPDIR 再运行：下方「临时文件已清理」断言的 glob 扫全局 /tmp 时，
     # 并发测试套件或用户真实 update.sh 运行遗留的 llama_release.*.json 会
@@ -586,7 +690,7 @@ INNER_EOF
     mkdir -p "$isolated_tmp"
     export TMPDIR="$isolated_tmp"
 
-    run bash "$inner"
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_curl'
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'b4001\tdef9876543210abcdef9876543210abcdef98\t2026-02-20T08:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4001')" ]
 
@@ -596,47 +700,27 @@ INNER_EOF
 }
 
 @test "_fetch_latest_release_curl returns 1 on HTTP failure" {
-    local mock_dir inner
+    local mock_dir
     mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
     # mock curl：输出 HTTP 403
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 403 '{"message":"Forbidden"}')"
 
-    inner="${mock_dir}/test_inner.sh"
-    {
-        echo "#!/bin/bash"
-        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
-        echo "PATH='${mock_dir}:$PATH'"
-        cat << 'INNER_EOF'
-_fetch_latest_release_curl 2>&1
-INNER_EOF
-    } > "$inner"
-
-    run bash "$inner"
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_curl 2>&1'
     [ "$status" -eq 1 ]
     [[ "$output" == *"HTTP 403"* ]]
 }
 
 @test "_fetch_latest_release_curl returns 1 on invalid JSON" {
-    local mock_dir inner
+    local mock_dir
     mock_dir="${TEST_TMPDIR}/mock"
     mkdir -p "$mock_dir"
     # mock curl：HTTP 200 但返回无效 JSON
     _make_stub_exec "${mock_dir}/curl" \
         "$(_mock_curl_response 200 'this is not json at all')"
 
-    inner="${mock_dir}/test_inner.sh"
-    {
-        echo "#!/bin/bash"
-        echo "_LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'"
-        echo "PATH='${mock_dir}:$PATH'"
-        cat << 'INNER_EOF'
-_fetch_latest_release_curl 2>&1
-INNER_EOF
-    } > "$inner"
-
-    run bash "$inner"
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_curl 2>&1'
     [ "$status" -eq 1 ]
 }
 

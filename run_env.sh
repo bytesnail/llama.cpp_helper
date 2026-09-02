@@ -40,14 +40,9 @@ fi
 # shellcheck source=/dev/null
 source "${_llama_boot_dir}/common.sh"
 
-# 版本号（供 llama_show_version 使用）经子 shell 提取：直接 source config.sh
-# 会把其 readonly 变量/数组（REPO/LOCK_FILE/LLAMA_CMAKE_KNOBS 等约 20 个）
-# 灌入父 shell——readonly 无法 unset，用户后续同名赋值直接报"只读变量"
-# （已实证）。同理本脚本不调用 llama_init_script_dir：不需要 SCRIPT_DIR，
-# 避免覆写父 shell 的同名变量（dotfiles 常用名）。
-if [[ -f "${_llama_boot_dir}/config.sh" ]]; then
-    LLAMA_HELPER_VERSION=$(bash -c 'source "$1/config.sh" 2>/dev/null; printf %s "${LLAMA_HELPER_VERSION:-unknown}"' _ "$_llama_boot_dir")
-fi
+# 版本号不在 source 时急切提取：只有 --version 分支消费 LLAMA_HELPER_VERSION，
+# 提取逻辑移入 main 的该分支（见下）——日常 source 热路径不再为罕见分支
+# 支付子 shell + config.sh 解析开销，值也不残留父 shell。
 unset _llama_boot_dir
 
 # --- 环境变量定义 --------------------------------------------
@@ -119,6 +114,13 @@ main() {
                 return 0
                 ;;
             --version)
+                # 版本号惰性提取（仅此分支消费）：经子 shell 读 config.sh——
+                # 直接 source 会把其 readonly 变量/数组（REPO/LOCK_FILE 等约
+                # 20 个）灌入父 shell（readonly 无法 unset，已实证）；local
+                # 声明经动态作用域供 llama_show_version 读取，main 返回后即
+                # 销毁，不残留父 shell
+                local LLAMA_HELPER_VERSION
+                LLAMA_HELPER_VERSION=$(bash -c 'source "$1/config.sh" 2>/dev/null; printf %s "${LLAMA_HELPER_VERSION:-unknown}"' _ "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)")
                 llama_show_version
                 return 0
                 ;;

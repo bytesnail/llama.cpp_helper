@@ -21,7 +21,10 @@ _LLAMA_CONFIG_SOURCED=1
 # --- 路径 ----------------------------------------------------
 # 可通过环境变量覆盖；默认为与本项目相邻的 llama.cpp 目录
 # _LLAMA_PROJECT_ROOT 同样允许预设（测试用 fake root 注入）
-_LLAMA_PROJECT_ROOT="${_LLAMA_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# cd 的 >/dev/null：CDPATH 非空且经相对路径 source 时，cd 会把命中路径打到
+# stdout（且可能优先命中 CDPATH 条目），命令替换会捕获到两行/错误路径——
+# 与 build.sh / update.sh / run_env.sh 三处同款 cd 的既有防护对齐
+_LLAMA_PROJECT_ROOT="${_LLAMA_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)}"
 readonly _LLAMA_PROJECT_ROOT
 LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-${_LLAMA_PROJECT_ROOT}/../llama.cpp}"
 
@@ -33,7 +36,8 @@ BUILD_STAMP="${BUILD_STAMP:-${BUILD_DIR}/.build-stamp}"
 # --- 仓库信息 ------------------------------------------------
 REPO="ggml-org/llama.cpp"
 readonly REPO
-REPO_URL="https://github.com/ggml-org/llama.cpp"
+# 由 REPO 派生（单一事实来源）：两处字面量各自维护会在迁移 fork/镜像时漂移
+REPO_URL="https://github.com/${REPO}"
 readonly REPO_URL
 
 # --- 资源限制和路径 ------------------------------------------

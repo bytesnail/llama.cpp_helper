@@ -43,6 +43,15 @@ _init_git_repo() {
     git -C "$repo" commit --allow-empty -q -m "test-init"
 }
 
+# Usage: _load_common / _load_build / _load_update
+# 被测脚本的一行式加载器：common.sh 直接 source（屏蔽防直接执行守卫的
+# stderr——source 场景本不触发，属双保险）；入口脚本用 _LLAMA_SOURCE_ONLY=1
+# 提取模式（跳过锁/trap/严格模式等副作用，仅加载函数定义）。策略点只在
+# 本文件维护一份，60+ 个调用点不留咒语拷贝。
+_load_common() { source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true; }
+_load_build()  { _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"; }
+_load_update() { _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"; }
+
 # Usage: _make_stub_exec <path> [body]
 # 创建可执行 stub 脚本（默认空 bash 脚本；body 为可选脚本体）。
 # 替代套件中 13+ 处重复的「echo '#!/bin/bash' > x; chmod +x x」模式。
@@ -57,13 +66,19 @@ _make_stub_exec() {
 }
 
 # Usage: _make_fake_built_repo <path> [stamp_content]
-# 构造 fake 构建仓库：build/bin 下两个必需二进制（可执行）、git 初始
+# 构造 fake 构建仓库：build/bin 下全部必需二进制（可执行）、git 初始
 # commit、.build-stamp（默认写当前 HEAD；传参可写任意内容制造不匹配）。
+# 二进制清单以 config.sh 的 REQUIRED_BINARIES 为单一事实来源（调用方未
+# 定义时回退默认两个）——清单漂移时夹具自动跟随，不会从假绿变假红。
 _make_fake_built_repo() {
     local repo="$1"
     mkdir -p "${repo}/build/bin"
+    local -a bins=("llama-cli" "llama-server")
+    if [[ -n "${REQUIRED_BINARIES[*]:-}" ]]; then
+        bins=("${REQUIRED_BINARIES[@]}")
+    fi
     local b
-    for b in llama-cli llama-server; do
+    for b in "${bins[@]}"; do
         touch "${repo}/build/bin/$b"
         chmod +x "${repo}/build/bin/$b"
     done
@@ -73,12 +88,50 @@ _make_fake_built_repo() {
     printf '%s\n' "${2:-$head}" > "${repo}/build/.build-stamp"
 }
 
+# Usage: _make_mock_conda <dir> [activate_rc] [activate_log]
+# 构造 mock conda 安装（bin/conda stub + etc/profile.d/conda.sh 定义的
+# conda() 函数）：activate 子命令导出 CONDA_PREFIX/CONDA_DEFAULT_ENV 模拟
+# 真实激活，按 <activate_rc> 返回（默认 0；非 0 时向 stderr 打印 mock
+# 失败消息——与真实 conda 报错形态一致）；给定 <activate_log> 时把每次
+# 激活的环境名追加到该文件（供断言"强制切换"）。接口形态（函数名 conda、
+# activate 子命令、导出约定）只在此维护一份，此前散落约 9 份手写拷贝。
+_make_mock_conda() {
+    local dir="$1"
+    local activate_rc="${2:-0}"
+    local activate_log="${3:-}"
+    mkdir -p "${dir}/etc/profile.d" "${dir}/bin"
+    _make_stub_exec "${dir}/bin/conda"
+    # shellcheck disable=SC2016  # 生成器刻意输出字面 $：单引号内的 $1/$2/${2:-base} 属于 stub 脚本体，非遗漏展开
+    {
+        printf 'conda() {\n'
+        printf '    if [[ "$1" == "activate" ]]; then\n'
+        if [[ -n "$activate_log" ]]; then
+            printf '        echo "activate $2" >> %q\n' "$activate_log"
+        fi
+        printf '        export CONDA_PREFIX="%s/envs/${2:-base}"\n' "$dir"
+        printf '        export CONDA_DEFAULT_ENV="${2:-base}"\n'
+        if [[ "$activate_rc" != "0" ]]; then
+            printf '        echo "mock conda: 环境不存在或激活失败（%s）" >&2\n' "$activate_rc"
+        fi
+        printf '        return %s\n' "$activate_rc"
+        printf '    fi\n'
+        printf '}\n'
+    } > "${dir}/etc/profile.d/conda.sh"
+}
+
 # Usage: _mock_curl_response <http_code> <body>
 # 生成 mock curl 脚本体（供 _make_stub_exec 使用）：解析 -o 参数写入
 # <body>，输出 <http_code> 作为 %{http_code} 结果。
+# body 双层转义：先转 heredoc 展开层（\ $ `），再转生成脚本的单引号层
+#（' → '\''）——否则 body 含单引号会破坏 stub 语法、含 $/反引号会在
+# 生成期被当前 shell 意外展开（已实证脆性）。
 _mock_curl_response() {
     local http_code="$1"
     local body="$2"
+    local esc="${body//\\/\\\\}"
+    esc="${esc//\$/\\$}"
+    esc="${esc//\`\\/\\\`}"
+    esc="${esc//\'/\'\\\'\'}"
     cat <<MOCK_EOF
 tmp_file=""
 while [[ \$# -gt 0 ]]; do
@@ -90,7 +143,7 @@ while [[ \$# -gt 0 ]]; do
         *) shift ;;
     esac
 done
-printf '%s' '${body}' > "\$tmp_file"
+printf '%s' '${esc}' > "\$tmp_file"
 echo "${http_code}"
 MOCK_EOF
 }

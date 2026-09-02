@@ -37,7 +37,7 @@ load test_helper
 
 @test "_verify_linking returns 0 and warns when bin_dir is empty" {
     # Source build.sh in test-only mode to load all functions without executing top-level code
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
+    _load_build
 
     run _verify_linking "" "llama-cli" "libcudart" "CUDA" "not found"
     [ "$status" -eq 0 ]
@@ -45,7 +45,7 @@ load test_helper
 }
 
 @test "_detect_cuda_lib_dir returns failure when nvcc not found" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
+    _load_build
 
     local _saved_path="$PATH"
     export PATH="/nonexistent"
@@ -57,7 +57,7 @@ load test_helper
 
 
 @test "_detect_cuda_lib_dir returns correct path when nvcc is in standard CUDA layout" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
+    _load_build
 
     # Create fake CUDA layout
     local fake_cuda="${TEST_TMPDIR}/fake_cuda"
@@ -77,7 +77,7 @@ load test_helper
 }
 
 @test "_verify_binary_exists returns 1 and warns when binary is missing" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
+    _load_build
 
     local empty_dir="${TEST_TMPDIR}/empty_bin"
     mkdir -p "$empty_dir"
@@ -87,7 +87,7 @@ load test_helper
 }
 
 @test "_verify_linking returns 0 when binary does not exist at given path" {
-    _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"
+    _load_build
 
     run _verify_linking "/nonexistent" "llama-cli" "libcudart" "CUDA" "not found"
     [ "$status" -eq 0 ]

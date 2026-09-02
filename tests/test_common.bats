@@ -8,17 +8,12 @@ setup() {
     _setup_tmpdir
     # Source common.sh — suppress stderr because common.sh's
     # anti-direct-execution guard prints to stderr in the bats subshell
-    source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+    _load_common
 }
 
-teardown() {
-    if [[ -n "${LOCK_FD:-}" ]]; then
-        # 不能加 2>/dev/null：无命令 exec 的重定向会永久改变当前 shell 的
-        # stderr；bash 关闭已关闭的 fd 静默返回 0，无需错误屏蔽
-        exec {LOCK_FD}>&-
-    fi
-    _teardown_tmpdir
-}
+# teardown 用 test_helper.bash 的共享实现（LOCK_FD 关闭 + tmpdir 清理）——
+# 本文件曾逐字复制一份覆盖共享版，helper 侧的修复（如反模式 9 注释）不会
+# 同步进副本，已删除该重复
 
 # --- Logging ---
 @test "llama_info outputs [INFO] prefix to stdout" {
@@ -43,7 +38,8 @@ teardown() {
     run --separate-stderr llama_err "failure"
     [ "$status" -eq 0 ]
     [[ "$stderr" =~ \[ERROR\].*failure ]]
-    [ -z "$stdout" ]
+    # stdout 应无输出；--separate-stderr 下 stdout 内容在 $output（$stdout 未定义，恒空断言会空转）
+    [ -z "$output" ]
 }
 
 @test "llama_step outputs === header === to stdout" {
@@ -152,14 +148,24 @@ teardown() {
 
 @test "llama_acquire_lock fails when already held by another process" {
     # Background process must use the same LOCK_FILE from test setup
+    # 就绪标记代替固定 sleep：固定等待在高负载机器上是确定性 flake（后台
+    # 进程尚未持锁时，主流程的 acquire 会拿到锁、断言假红）。持锁方拿到锁
+    # 后写标记文件，主流程轮询标记（5 秒上限）——超时则 loud 失败而非碰运气
+    local ready_file="${TEST_TMPDIR}/lock_held.ready"
     (
-        source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true
+        _load_common
         LOCK_FILE="${LOCK_FILE}" llama_acquire_lock
-        sleep 2  # Reduce test wait time
+        : > "$ready_file"
+        sleep 2  # 持锁窗口：主流程被标记唤醒后立即探测，2 秒足够
         LOCK_FILE="${LOCK_FILE}" llama_release_lock
     ) &
     local bg_pid=$!
-    sleep 1
+    local waited=0
+    while [[ ! -f "$ready_file" ]] && (( waited < 100 )); do
+        sleep 0.05
+        (( ++waited ))  # 前置自增：(( waited++ )) 在 0 时求值为假会触发 errexit
+    done
+    [[ -f "$ready_file" ]]
     run llama_acquire_lock
     [ "$status" -eq 1 ]
     kill "$bg_pid" 2>/dev/null || true
@@ -414,6 +420,23 @@ teardown() {
     [[ "$output" =~ "rc=1" ]]
 }
 
+@test "llama_run_silent survives wrapping a shell function that enables set -e" {
+    # 回归：被包装的 shell 函数内部启用 set -e 后 return 非零时，裸调用 "$@"
+    # 曾把 errexit 留在开启状态，函数返回非零的瞬间杀死整个 shell——rc 未写、
+    # warn 未打。修复后调用在 if 豁免上下文进行且对称恢复 errexit（已实证）
+    run bash -c "
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || :
+        set +e
+        fn() { set -e; return 3; }
+        llama_run_silent rc fn
+        echo \"rc=\$rc\"
+        set -o | grep -q 'errexit.*off' && echo ERREXIT-OFF-OK
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "rc=3" ]]
+    [[ "$output" =~ "ERREXIT-OFF-OK" ]]
+}
+
 @test "llama_run_silent out-var survives names colliding with implementation internals" {
     # 动态作用域暗坑：实现内部的 local 会遮蔽调用者同名变量——printf -v ret
     # 曾写到函数自己的 local ret 上，调用者永远拿不到值。实现改用 _lrs_ 前缀
@@ -432,10 +455,7 @@ teardown() {
 @test "llama_activate_conda preserves caller errexit after activation (regression)" {
     # 回归测试：同一 prev_opts 缺陷的 conda 路径变体
     local mock_e="${TEST_TMPDIR}/mock_conda_e"
-    mkdir -p "${mock_e}/etc/profile.d" "${mock_e}/bin"
-    _make_stub_exec "${mock_e}/bin/conda"
-    echo 'conda() { if [[ "$1" == "activate" ]]; then return 0; fi; }' \
-        > "${mock_e}/etc/profile.d/conda.sh"
+    _make_mock_conda "$mock_e"
     run bash -c "
         set -euo pipefail
         unset CONDA_PREFIX CONDA_DEFAULT_ENV
@@ -558,13 +578,19 @@ teardown() {
 }
 
 # --- Build Health ---
+# llama_check_build_health 的布局常量（BUILD_BIN_DIR/BUILD_STAMP）fail-closed
+# 取自 config.sh（无默认布局回退）——本文件只 source common.sh，须显式设置
 @test "llama_check_build_health returns 1 when build dir does not exist" {
     LLAMA_CPP_SRC="${TEST_TMPDIR}/nonexistent_llama"
+    BUILD_BIN_DIR="${LLAMA_CPP_SRC}/build/bin"
+    BUILD_STAMP="${LLAMA_CPP_SRC}/build/.build-stamp"
     run llama_check_build_health
     [ "$status" -eq 1 ]
 }
 @test "llama_check_build_health returns 1 when binaries are missing" {
     LLAMA_CPP_SRC="${TEST_TMPDIR}/fake_llama"
+    BUILD_BIN_DIR="${LLAMA_CPP_SRC}/build/bin"
+    BUILD_STAMP="${LLAMA_CPP_SRC}/build/.build-stamp"
     REQUIRED_BINARIES=("llama-cli" "llama-server")
     mkdir -p "${LLAMA_CPP_SRC}/build/bin"
     run llama_check_build_health
@@ -573,6 +599,8 @@ teardown() {
 
 @test "llama_check_build_health returns 0 when binaries exist and stamp matches" {
     LLAMA_CPP_SRC="${TEST_TMPDIR}/healthy_llama"
+    BUILD_BIN_DIR="${LLAMA_CPP_SRC}/build/bin"
+    BUILD_STAMP="${LLAMA_CPP_SRC}/build/.build-stamp"
     REQUIRED_BINARIES=("llama-cli" "llama-server")
     _make_fake_built_repo "$LLAMA_CPP_SRC"
     run llama_check_build_health
@@ -581,6 +609,8 @@ teardown() {
 
 @test "llama_check_build_health returns 1 when stamp does not match HEAD" {
     LLAMA_CPP_SRC="${TEST_TMPDIR}/stale_llama"
+    BUILD_BIN_DIR="${LLAMA_CPP_SRC}/build/bin"
+    BUILD_STAMP="${LLAMA_CPP_SRC}/build/.build-stamp"
     REQUIRED_BINARIES=("llama-cli" "llama-server")
     _make_fake_built_repo "$LLAMA_CPP_SRC" "0000000000000000000000000000000000000000"
     run llama_check_build_health
@@ -614,11 +644,7 @@ teardown() {
 
 @test "llama_activate_conda detects conda from CONDA_EXE" {
     local mock_base="${TEST_TMPDIR}/mock_conda"
-    mkdir -p "${mock_base}/etc/profile.d"
-    mkdir -p "${mock_base}/bin"
-    _make_stub_exec "${mock_base}/bin/conda"
-    echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_base}'/envs/${2:-base}"; return 0; fi; }' \
-        > "${mock_base}/etc/profile.d/conda.sh"
+    _make_mock_conda "$mock_base"
     # 不走短路路径：显式清除继承自开发机的 base 激活状态
     unset CONDA_PREFIX CONDA_DEFAULT_ENV
     CONDA_EXE="${mock_base}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
@@ -626,11 +652,25 @@ teardown() {
     [[ "$output" =~ "已激活 conda 环境" ]]
 }
 
+@test "llama_activate_conda resolves symlinked CONDA_EXE to real install root" {
+    # 回归：CONDA_EXE 为符号链接（/usr/local/bin/conda 形态）时，dirname/..
+    # 曾得到链接所在目录——非空即短路候选清单与 conda info 回退，真实
+    # 安装根永远找不到，conda.sh 定位失败、安装形同虚设（已实证）
+    local real_conda="${TEST_TMPDIR}/real_conda"
+    local shim_dir="${TEST_TMPDIR}/shim_bin"
+    _make_mock_conda "$real_conda"
+    mkdir -p "$shim_dir"
+    ln -s "${real_conda}/bin/conda" "${shim_dir}/conda"
+    # 不走短路路径：显式清除继承自开发机的 base 激活状态
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV
+    CONDA_EXE="${shim_dir}/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "已激活 conda 环境" ]]
+}
+
 @test "llama_activate_conda detects conda from common path" {
     local mock_home="${TEST_TMPDIR}/fake_home"
-    mkdir -p "${mock_home}/miniconda3/etc/profile.d"
-    echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_home}'/miniconda3/envs/${2:-base}"; return 0; fi; }' \
-        > "${mock_home}/miniconda3/etc/profile.d/conda.sh"
+    _make_mock_conda "${mock_home}/miniconda3"
     unset CONDA_EXE CONDA_PREFIX CONDA_DEFAULT_ENV
     HOME="$mock_home" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
@@ -640,18 +680,7 @@ teardown() {
 @test "llama_activate_conda switches to CONDA_ENV_NAME when another env is active" {
     # 权威语义核心：当前激活 other 环境，显式指定 myenv，必须强制切换
     local mock_base="${TEST_TMPDIR}/mock_switch"
-    mkdir -p "${mock_base}/etc/profile.d" "${mock_base}/bin"
-    _make_stub_exec "${mock_base}/bin/conda"
-    cat > "${mock_base}/etc/profile.d/conda.sh" <<EOF
-conda() {
-    if [[ "\$1" == "activate" ]]; then
-        echo "activate \$2" >> "${mock_base}/activate.log"
-        export CONDA_PREFIX="${mock_base}/envs/\${2:-base}"
-        export CONDA_DEFAULT_ENV="\${2:-base}"
-        return 0
-    fi
-}
-EOF
+    _make_mock_conda "$mock_base" 0 "${mock_base}/activate.log"
     CONDA_PREFIX="/fake/other" CONDA_DEFAULT_ENV=other CONDA_ENV_NAME=myenv \
         CONDA_EXE="${mock_base}/bin/conda" CONDA_AUTO_ACTIVATE=1 \
         run llama_activate_conda
@@ -676,11 +705,7 @@ EOF
     # 权威语义：显式指定的环境激活失败 → 硬报错返回 1（build.sh/update.sh
     # 的裸调用在 set -e 下随之中止）
     local mock_fail="${TEST_TMPDIR}/mock_fail"
-    mkdir -p "${mock_fail}/etc/profile.d"
-    mkdir -p "${mock_fail}/bin"
-    _make_stub_exec "${mock_fail}/bin/conda"
-    echo 'conda() { if [[ "$1" == "activate" ]]; then echo "环境不存在" >&2; return 1; fi; }' \
-        > "${mock_fail}/etc/profile.d/conda.sh"
+    _make_mock_conda "$mock_fail" 1
     unset CONDA_PREFIX CONDA_DEFAULT_ENV
     CONDA_ENV_NAME=no_such_env CONDA_EXE="${mock_fail}/bin/conda" CONDA_AUTO_ACTIVATE=1 \
         run llama_activate_conda
@@ -768,6 +793,26 @@ EOF
     [ "$output" = "0" ]
 }
 
+@test "llama_get_gpu_count distinguishes driver failure from no-GPU" {
+    # 三分支契约：nvidia-smi 存在但执行失败（驱动/NVML 异常）→ stdout 输出 0、
+    # 返回 1、stderr 有警告——不能把驱动故障谎报为健康的"0 块 GPU"
+    # （与 llama_print_hardware_summary 的 smi_rc 处理对齐）
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    printf '#!/bin/bash\nexit 9\n' > "${mock_dir}/nvidia-smi"
+    chmod +x "${mock_dir}/nvidia-smi"
+
+    local _saved_path="$PATH"
+    PATH="${mock_dir}:$PATH"
+    run --separate-stderr llama_get_gpu_count
+    PATH="$_saved_path"
+    [ "$status" -eq 1 ]
+    # bats 的 run --separate-stderr 只定义 $output（stdout 内容）与 $stderr，
+    # 不定义 $stdout——用 $stdout 断言恒因变量未定义而失败
+    [ "$output" = "0" ]
+    [[ "$stderr" =~ "执行失败" ]]
+}
+
 @test "llama_check_build_health returns 1 when LLAMA_CPP_SRC unset" {
     unset LLAMA_CPP_SRC
     run llama_check_build_health
@@ -796,6 +841,19 @@ EOF
     [ "$rc" -eq 0 ]
     [ -n "${LOCK_FD:-}" ]
     llama_release_lock
+}
+
+@test "llama_acquire_lock refuses a symlinked lock file" {
+    # 锁文件路径在 XDG_RUNTIME_DIR 缺失时是可预测的 /tmp 路径——跟随符号
+    # 链接打开并截断写入（_lock_grab 的 printf >）会构成同机本地 clobber
+    # 面；必须在打开前拒绝
+    local target="${TEST_TMPDIR}/victim.txt"
+    echo "precious" > "$target"
+    ln -s "$target" "${TEST_TMPDIR}/evil.lock"
+    run llama_acquire_lock "${TEST_TMPDIR}/evil.lock"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "符号链接" ]]
+    [ "$(cat "$target")" = "precious" ]
 }
 
 # --- conda Activation Resilience (set -eu) ---
@@ -828,17 +886,7 @@ CONDAEOF
 @test "llama_activate_conda aborts set -e caller when conda activate fails" {
     # 新契约：激活失败返回 1，set -e 调用方（build.sh/update.sh 的裸调用）随之中止
     local mock_sete="${TEST_TMPDIR}/mock_sete"
-    mkdir -p "${mock_sete}/etc/profile.d"
-    mkdir -p "${mock_sete}/bin"
-    _make_stub_exec "${mock_sete}/bin/conda"
-    # Simulate conda.sh where conda activate returns non-zero
-    cat > "${mock_sete}/etc/profile.d/conda.sh" <<'CONDAEOF'
-conda() {
-    if [[ "$1" == "activate" ]]; then
-        return 1
-    fi
-}
-CONDAEOF
+    _make_mock_conda "$mock_sete" 1
     CONDA_EXE="${mock_sete}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
         unset CONDA_PREFIX CONDA_DEFAULT_ENV
@@ -854,16 +902,7 @@ CONDAEOF
 @test "llama_activate_conda failure can be tolerated with || true under set -e" {
     # 调用方显式 || true 可容忍失败（run_env.sh 场景：错误已打印，流程继续）
     local mock_tol="${TEST_TMPDIR}/mock_tol"
-    mkdir -p "${mock_tol}/etc/profile.d"
-    mkdir -p "${mock_tol}/bin"
-    _make_stub_exec "${mock_tol}/bin/conda"
-    cat > "${mock_tol}/etc/profile.d/conda.sh" <<'CONDAEOF'
-conda() {
-    if [[ "$1" == "activate" ]]; then
-        return 1
-    fi
-}
-CONDAEOF
+    _make_mock_conda "$mock_tol" 1
     CONDA_EXE="${mock_tol}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
         unset CONDA_PREFIX CONDA_DEFAULT_ENV
@@ -878,16 +917,7 @@ CONDAEOF
 
 @test "llama_activate_conda restores set -u after conda activation" {
     local mock_restore="${TEST_TMPDIR}/mock_restore"
-    mkdir -p "${mock_restore}/etc/profile.d"
-    mkdir -p "${mock_restore}/bin"
-    _make_stub_exec "${mock_restore}/bin/conda"
-    cat > "${mock_restore}/etc/profile.d/conda.sh" <<'CONDAEOF'
-conda() {
-    if [[ "$1" == "activate" ]]; then
-        return 0
-    fi
-}
-CONDAEOF
+    _make_mock_conda "$mock_restore"
     CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
         unset CONDA_PREFIX CONDA_DEFAULT_ENV
@@ -899,9 +929,11 @@ CONDAEOF
     "
     # set -u 下引用未绑定变量会以非零退出（具体退出码 127/1 取决于 errexit
     # 状态，不应固化——errexit 现在被正确恢复后该码为 1，此前 127 恰恰是
-    # errexit 被静默关闭的 bug 表象）；断言非零 + 未绑定错误消息即可
+    # errexit 被静默关闭的 bug 表象）；断言非零 + 未绑定错误消息即可。
+    # bash 内置错误文案随宿主 locale 变化（zh=未绑定的变量 / C=unbound
+    # variable），断言必须两种都接受，否则非 zh 机器上质量门禁假红（已实测）
     [ "$status" -ne 0 ]
-    [[ "$output" =~ "未绑定的变量" ]]
+    [[ "$output" == *"未绑定的变量"* || "$output" == *"unbound variable"* ]]
 }
 
 # --- Hardware Info ---
@@ -963,20 +995,13 @@ CONDAEOF
     [ "$output" -ge 1 ]
 }
 
-@test "llama_hw_cpu_cores_logical returns positive integer" {
-    run llama_hw_cpu_cores_logical
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ ^[0-9]+$ ]]
-    [ "$output" -ge 1 ]
-}
-
 @test "llama_hw_cpu_cores_physical does not exceed logical" {
     # physical 来自 lscpu 硬件拓扑（cpuset 无关），logical 来自 nproc
     # （cpuset 感知）——cpuset 受限环境（容器 --cpuset-cpus、cgroup）中
     # nproc < 硬件线程数，phys <= log 必然不成立但生产行为正确：检测后跳过
     local phys log cpuinfo_count
     phys=$(llama_hw_cpu_cores_physical)
-    log=$(llama_hw_cpu_cores_logical)
+    log=$(llama_get_cpu_count)
     if ((phys > log)); then
         cpuinfo_count=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 0)
         if ((cpuinfo_count > log)); then

@@ -90,10 +90,15 @@ load test_helper
 
 @test "no script mixes tabs and spaces for indentation" {
     # All .sh scripts use space indentation per .editorconfig
+    # grep 退出码三态须区分：0=命中 tab（违规）、1=无匹配（通过）、
+    # ≥2=grep 自身错误（文件缺失/无 PCRE）——此前 `&& exit 1 || true`
+    # 把 rc≥2 吞掉，测试在什么都没检查的情况下空转常绿（已实证风险）
     run bash -c "
-        scripts='common.sh config.sh build.sh update.sh run_env.sh'
-        for s in \$scripts; do
-            grep -nP '^\t' '${BATS_TEST_DIRNAME}/../'\$s && exit 1 || true
+        for s in common.sh config.sh build.sh update.sh run_env.sh; do
+            out=\$(grep -nP '^\t' '${BATS_TEST_DIRNAME}/../'\$s 2>&1)
+            rc=\$?
+            if [ \"\$rc\" -eq 0 ]; then echo \"tab indentation in \$s: \$out\"; exit 1; fi
+            if [ \"\$rc\" -ge 2 ]; then echo \"grep error on \$s: \$out\"; exit 1; fi
         done
         exit 0
     "

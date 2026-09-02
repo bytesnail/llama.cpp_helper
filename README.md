@@ -163,7 +163,7 @@ run_env.sh  ──source──> common.sh（仅此一项：config.sh 的 readonl
 
 ### build.sh — 构建
 
-使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS + CUDA 双后端。构建完成后自动验证二进制文件、动态库链接和 GPU 设备。
+使用 CMake + Ninja 构建 llama.cpp，启用 OpenBLAS + CUDA 双后端。构建完成后自动验证二进制文件存在性、动态库链接与可启动性。
 
 ```bash
 bash build.sh       # 完整重新构建（清理 + 配置 + 编译 + 验证）

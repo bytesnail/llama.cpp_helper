@@ -154,13 +154,24 @@ llama_get_cpu_count() {
 # --- GPU 检测 ------------------------------------------------
 # Usage: llama_get_gpu_count
 # 返回通过 nvidia-smi 检测到的 NVIDIA GPU 数量。
-# 输出：stdout 输出 GPU 数量（无则为 0）；退出码：nvidia-smi 存在返回 0，未安装返回 1。
+# 输出：stdout 输出 GPU 数量（无则为 0）；退出码：nvidia-smi 正常工作返回 0，
+# 未安装或执行失败（驱动/NVML 异常）返回 1。
+# 执行失败必须与"无 GPU"区分：nvidia-smi 非零退出时经 stderr 警告（stdout
+# 是数量契约，不能混入），否则驱动故障会被谎报为"0 块 GPU"——与
+# llama_print_hardware_summary 的 smi_rc 三分支处理对齐。
 llama_get_gpu_count() {
     if command -v nvidia-smi &>/dev/null; then
-        local count
-        # || true：nvidia-smi 存在但运行失败（驱动错误等）时，pipefail 会使管线
-        # 返回非零，在 set -e 下终止整个脚本；此处应降级为 0 GPU 而非中止构建。
-        count=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l || true)
+        local smi_out smi_rc=0
+        smi_out=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null) || smi_rc=$?
+        if [[ "$smi_rc" -ne 0 ]]; then
+            llama_warn "nvidia-smi 存在但执行失败（退出码: ${smi_rc}）——驱动异常？按 0 块 GPU 处理" >&2
+            echo "0"
+            return 1
+        fi
+        # 退出码 0 但无输出（驱动异常边缘情形）：here-string 恒附加换行，
+        # 不经 -n 守卫会得到幻影计数 1
+        local count=0
+        [[ -n "$smi_out" ]] && count=$(wc -l <<< "$smi_out")
         echo "$count"
         return 0
     fi
@@ -188,18 +199,16 @@ _llama_join() {
 # Usage: _llama_lscpu_field <field_regex>
 # 解析 lscpu 输出中首个匹配字段（$1 为作用于首列的正则）的值，去前导空格。
 # lscpu 不可用时输出空串。
-# 同进程内缓存 lscpu 输出（硬件汇总会查询多个字段），避免每次 fork lscpu；
+# 无跨调用缓存：全部消费方都经 $(...) 命令替换调用本函数，缓存赋值发生在
+# 子 shell 中随之销毁（曾经的 _LLAMA_LSCPU_CACHE 是恒未命中的死代码）；
 # LC_ALL=C 固定英文输出，防止本地化字段名（如中文 "型号:"）导致匹配失败。
 _llama_lscpu_field() {
     # || true：lscpu 不可用时（缺失/损坏）赋值在 pipefail 下返回非零，
     # 会中止 build.sh（经 llama_hw_cpu_* → llama_print_hardware_summary 调用链）。
-    # 加 || true 后缓存为空串，调用者得到空串，从而触发 /proc/cpuinfo 回退或 0 回退。
-    if [[ -z "${_LLAMA_LSCPU_CACHE+x}" ]]; then
-        _LLAMA_LSCPU_CACHE=$(LC_ALL=C lscpu 2>/dev/null || true)
-    fi
+    # 加 || true 后输出为空串，调用者得到空串，从而触发 /proc/cpuinfo 回退或 0 回退。
     awk -F: -v re="$1" '
         $1 ~ re { sub(/^[[:space:]]+/, "", $2); print $2; exit }
-    ' <<< "$_LLAMA_LSCPU_CACHE"
+    ' <<< "$(LC_ALL=C lscpu 2>/dev/null || true)"
 }
 
 # Usage: llama_hw_cpu_model
@@ -234,12 +243,6 @@ llama_hw_cpu_cores_physical() {
     else
         printf 0
     fi
-}
-
-# Usage: llama_hw_cpu_cores_logical
-# 输出逻辑线程数（含超线程）。复用 llama_get_cpu_count，缺失时回退保守值。
-llama_hw_cpu_cores_logical() {
-    llama_get_cpu_count
 }
 
 # llama.cpp CPU 后端相关的指令集映射（/proc/cpuinfo flag 名 → 显示名）。
@@ -317,7 +320,7 @@ llama_print_hardware_summary() {
     cpu_model=$(llama_hw_cpu_model)
     sockets=$(llama_hw_cpu_sockets)
     cores_phy=$(llama_hw_cpu_cores_physical)
-    cores_log=$(llama_hw_cpu_cores_logical)
+    cores_log=$(llama_get_cpu_count)
     flags=$(llama_hw_cpu_flags)
 
     [[ -n "$cpu_model" ]] && llama_detail "CPU:    ${cpu_model}"
@@ -419,7 +422,13 @@ llama_activate_conda() {
     local conda_root=""
 
     if [[ -n "${CONDA_EXE:-}" && -x "$CONDA_EXE" ]]; then
-        conda_root="$(cd "$(dirname "$CONDA_EXE")/.." 2>/dev/null && pwd)" || true
+        # readlink -f 先解析符号链接：conda 经 symlink 暴露（如
+        # /usr/local/bin/conda → /opt/conda/bin/conda）时，dirname/.. 得到的
+        # 是链接所在目录而非真实安装根——非空即短路下方候选清单与
+        # conda info --base 回退，符号链接形态的安装永远找不到 conda.sh（已实证）
+        local conda_exe_real
+        conda_exe_real=$(readlink -f "$CONDA_EXE" 2>/dev/null || true)
+        conda_root="$(cd "$(dirname "${conda_exe_real:-$CONDA_EXE}")/.." 2>/dev/null && pwd)" || true
     fi
 
     if [[ -z "$conda_root" ]]; then
@@ -520,6 +529,13 @@ llama_activate_conda() {
 _lock_grab() {
     local lock_file="$1"
     local fd
+    # 拒绝符号链接与非常规文件：XDG_RUNTIME_DIR 缺失时锁文件路径退化为可预测的
+    # /tmp/llama_cpp_helper-<UID>.lock（config.sh），exec {fd}>> 与下方的
+    # printf > 截断写均跟随符号链接——预置 symlink 会构成同机本地 clobber 面
+    if [[ -L "$lock_file" || ( -e "$lock_file" && ! -f "$lock_file" ) ]]; then
+        llama_err "锁文件不是常规文件（拒绝跟随符号链接）: ${lock_file}"
+        return 2
+    fi
     # if ! 守护：exec 重定向失败时只打印错误并返回，不杀死 shell
     if ! exec {fd}>>"$lock_file"; then
         llama_err "无法打开锁文件: ${lock_file}"
@@ -573,7 +589,9 @@ _recover_stale_lock() {
 # Usage: llama_acquire_lock [lock_file]
 # 返回：成功返回 0（设置 LOCK_FD），锁被占用或不可用返回 1。
 llama_acquire_lock() {
-    local lock_file="${1:-$LOCK_FILE}"  # 默认使用脚本级 LOCK_FILE
+    # ${LOCK_FILE:-}：未 source config.sh 的调用方在 set -u 下也应得到
+    # 下方"未指定锁文件路径"的明确诊断，而非 bash 裸 unbound variable 中止
+    local lock_file="${1:-${LOCK_FILE:-}}"  # 默认使用脚本级 LOCK_FILE
     if [[ -z "$lock_file" ]]; then
         llama_err "未指定锁文件路径"
         return 1
@@ -716,16 +734,25 @@ llama_with_network_context() {
 # 参数为完整 40 字符十六进制 commit SHA 时返回 0，否则返回 1。
 llama_is_full_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{40}$ ]]; }
 
+# Usage: llama_is_commit_sha <string>
+# 参数为 7-40 位十六进制（短/完整 commit SHA）时返回 0，否则返回 1。
+# update.sh 的用户目标版本接受同一形态（refs/tags 解析在前，
+# 同名纯 hex tag 优先按 tag 处理）——版本对比与 checkout 两处共用此规则，
+# 避免各自维护正则而漂移。
+llama_is_commit_sha() { [[ "$1" =~ ^[a-fA-F0-9]{7,40}$ ]]; }
+
 # Usage: llama_check_build_health
 # 检查当前构建是否完整且与当前源码 commit 匹配。
 # 返回 0 = 构建健康，1 = 构建缺失或过期。
 llama_check_build_health() {
-    # 前置检查：确保 config.sh 已被 source
-    if [[ -z "${LLAMA_CPP_SRC:-}" ]]; then
+    # 前置检查：LLAMA_CPP_SRC 与构建布局常量（BUILD_BIN_DIR/BUILD_STAMP）均由
+    # config.sh 统一定义——与 build.sh/update.sh 的「无回退，直接引用」协议一致，
+    # 未 source config.sh 时 fail-closed 按不健康处理（影子布局副本会随
+    # config.sh 默认值漂移而静默看错目录，且不经 BUILD_DIR 覆盖派生）
+    if [[ -z "${LLAMA_CPP_SRC:-}" || -z "${BUILD_BIN_DIR:-}" || -z "${BUILD_STAMP:-}" ]]; then
         return 1
     fi
-    # 构建布局常量由 config.sh 统一定义；未 source config.sh 时按默认布局回退
-    local bin_dir="${BUILD_BIN_DIR:-${LLAMA_CPP_SRC}/build/bin}"
+    local bin_dir="$BUILD_BIN_DIR"
     if [[ ! -d "$bin_dir" ]]; then
         return 1
     fi
@@ -736,7 +763,7 @@ llama_check_build_health() {
         fi
     done
     # 检查构建标记文件是否存在且与当前源码 commit 匹配
-    local build_stamp="${BUILD_STAMP:-${LLAMA_CPP_SRC}/build/.build-stamp}"
+    local build_stamp="$BUILD_STAMP"
     local current_head
     current_head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || echo "")
     # git 不可用（缺失/dubious ownership/.git 损坏）时无法判定：
@@ -806,11 +833,15 @@ llama_die() {
 # shell 自身行为（PATH 被改写后全部外部命令 lookup 失败——已实证）或
 # 直接报错（UID/SHELLOPTS 等 readonly）。llama_run_silent 与 _parse_args
 # 等 out-param 接口在形态校验之外必须过此名单。
+# 尾部同时列入本项目跨模块可变状态（AGENTS.md 记录的例外清单）：覆写
+# LOCK_FD 会使真锁 fd 泄漏（锁持有至进程退出）、llama_release_lock 误关
+# stdin；覆写构建事务哨兵会使失败构建的清理条件被结构性短路。
 # declare -ar 是 Bash 中声明只读数组的唯一方式（readonly 无法作用于数组）
 declare -ar _LLAMA_OUT_VAR_DENY=(
     PATH IFS HOME PWD OLDPWD SHELL TERM LANG LC_ALL LC_CTYPE PS1 PS2
     BASH_SOURCE FUNCNAME BASHPID BASHOPTS SHELLOPTS
     UID EUID PPID GROUPS RANDOM SECONDS LINENO DIRSTACK PIPESTATUS
+    LOCK_FD incremental _CLEANUP_DONE _BUILD_TOUCHED _BUILD_COMMITTED
 )
 # Usage: llama_out_var_denylisted <name>
 # <name> 在 out-param 保留名单（_LLAMA_OUT_VAR_DENY）中时返回 0，否则返回 1。
@@ -820,6 +851,17 @@ llama_out_var_denylisted() {
         [[ "$name" == "$denied" ]] && return 0
     done
     return 1
+}
+
+# Usage: _llama_validate_out_var <name> <reserved_prefix>
+# out-param 接口的结果变量名统一校验（C1 防呆模式的单一实现点）：
+# 合法标识符、不以 <reserved_prefix> 开头、不在 _LLAMA_OUT_VAR_DENY 名单。
+# llama_run_silent 与 update.sh 的 _parse_args 共用；报错文案留在各调用点。
+_llama_validate_out_var() {
+    local name="$1" prefix="$2"
+    [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || return 1
+    [[ "$name" != "$prefix"* ]] || return 1
+    ! llama_out_var_denylisted "$name"
 }
 
 # Usage: llama_safe_exit [exit_code]
@@ -901,9 +943,13 @@ llama_print_run_examples() {
 # 契约：
 #   - 恒返回 0 —— 被包装命令失败不会中止 set -e 的调用者；状态只经 <rc_var> 传递。
 #     如何响应失败（die / 回滚 / 忽略）由调用者读取 <rc_var> 决定
-#   - <rc_var> 必写（含失败路径），调用者在 set -u 下读取安全；调用点应先
-#     local 声明该变量，使动态作用域下的 printf -v 写入局部变量而非产生全局变量
+#   - <rc_var> 必写（含命令失败与缺命令误用路径），调用者在 set -u 下读取
+#     安全；调用点应先 local 声明该变量，使动态作用域下的 printf -v 写入
+#     局部变量而非产生全局变量
 #   - 命令失败时 warn 并转储捕获输出到 stderr
+#   - 被包装命令可以是 shell 函数：调用在 if 豁免上下文中进行（其内部
+#     set -e 后的 return 非零不会杀死本 shell），返回后对称恢复 errexit，
+#     防止其内部开启的 set -e 泄漏给调用者
 #   - 误用（rc_var 缺失/非法、保留前缀 _lrs_、缺少命令）返回 2 —— 程序员错误，
 #     与被包装命令的失败是两类，必须大声失败
 # 内部局部变量使用 _lrs_ 前缀：动态作用域下同名的函数内 local 会遮蔽调用者
@@ -911,20 +957,18 @@ llama_print_run_examples() {
 # 使碰撞在结构上不可能。
 llama_run_silent() {
     local _lrs_rc_var="${1:-}"
-    if [[ ! "$_lrs_rc_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ || "$_lrs_rc_var" == _lrs_* ]] \
-        || llama_out_var_denylisted "$_lrs_rc_var"; then
+    if ! _llama_validate_out_var "$_lrs_rc_var" "_lrs_"; then
         llama_err "llama_run_silent: 无效或保留的输出变量名: ${_lrs_rc_var:-<空>}（_lrs_ 前缀与 shell 关键变量名为实现保留）"
         return 2
     fi
+    # 先落默认值：任何后续路径（含缺命令的误用路径）都保证 <rc_var> 必写
+    # （set -u 调用者读取安全）；默认非零——命令未运行按失败处理，绝不谎报成功
+    printf -v "$_lrs_rc_var" '%s' 1
     shift
     if (($# == 0)); then
         llama_err "llama_run_silent: 缺少命令"
         return 2
     fi
-
-    # 先落默认值：任何后续路径都保证 <rc_var> 必写（set -u 调用者读取安全）；
-    # 默认非零——命令未运行按失败处理，绝不谎报成功
-    printf -v "$_lrs_rc_var" '%s' 1
 
     local _lrs_tmp_out
     _lrs_tmp_out=$(mktemp "${TMPDIR:-/tmp}/llama_run_silent.XXXXXX" 2>/dev/null) || _lrs_tmp_out=""
@@ -937,18 +981,30 @@ llama_run_silent() {
     set +e
     local _lrs_ret
     if [[ -n "$_lrs_tmp_out" ]]; then
-        "$@" >"$_lrs_tmp_out" 2>&1
-        _lrs_ret=$?
+        # if/else 豁免上下文：被包装的若是 shell 函数且内部启用了 set -e，
+        # 其 return 非零时裸调用 "$@" 会在返回瞬间杀死整个 shell（rc 未写、
+        # 捕获输出未转储、临时文件泄漏——已实证）；作为 if 条件则只是被测状态
+        if "$@" >"$_lrs_tmp_out" 2>&1; then
+            _lrs_ret=0
+        else
+            _lrs_ret=$?
+        fi
         if [[ "$_lrs_ret" -ne 0 ]]; then
             llama_warn "命令失败 (退出码: ${_lrs_ret})"
             cat "$_lrs_tmp_out" >&2 2>/dev/null || true
         fi
         rm -f "$_lrs_tmp_out"
     else
-        "$@"
-        _lrs_ret=$?
+        if "$@"; then
+            _lrs_ret=0
+        else
+            _lrs_ret=$?
+        fi
     fi
-    if ((_lrs_restore_e)); then set -e; fi
+    # 对称恢复（与 llama_activate_conda 同款）：原本开启的重新开启，原本关闭
+    # 的强制关闭——被包装的 shell 函数内部 set -e 后成功返回会把 errexit 泄漏
+    # 给调用者，其剩余代码会在不知情的严格模式下运行
+    if ((_lrs_restore_e)); then set -e; else set +e; fi
     printf -v "$_lrs_rc_var" '%s' "$_lrs_ret"
     return 0
 }

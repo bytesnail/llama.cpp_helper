@@ -73,7 +73,6 @@ _detect_cuda_lib_dir() {
     fi
     local nvcc_dir nvcc_real_path
     nvcc_real_path=$(readlink -f "$(command -v nvcc)" 2>/dev/null) || return 1
-    if [[ -z "$nvcc_real_path" ]]; then return 1; fi
     nvcc_dir=$(dirname "$(dirname "$nvcc_real_path")")
     local cuda_lib_dir
     cuda_lib_dir="${nvcc_dir}/targets/$(uname -m)-linux/lib"
@@ -84,7 +83,15 @@ _detect_cuda_lib_dir() {
         # 与调用点 if/else 降级分支（见行 ~314）永远无法到达。参考反模式 8。
         cuda_rt=$(find "$nvcc_dir" -maxdepth "$max_search_depth" -name libcudart.so -not -path '*/stubs/*' -print -quit 2>/dev/null || true)
         if [[ -n "$cuda_rt" ]]; then
-            cuda_lib_dir=$(dirname "$(readlink -f "$cuda_rt")")
+            # 内层 readlink 必须防护：本函数在调用点的 if 条件中执行（set -e
+            # 已失效），readlink 失败（TOCTOU/异常文件系统）时 dirname 空串
+            # 得到 "."——能通过下方 -d 检查被当作 CUDA 库目录，静默把
+            # CMAKE_BUILD_RPATH 污染为当前目录（已实证）
+            local cuda_rt_real
+            cuda_rt_real=$(readlink -f "$cuda_rt" 2>/dev/null || true)
+            if [[ -n "$cuda_rt_real" ]]; then
+                cuda_lib_dir=$(dirname "$cuda_rt_real")
+            fi
         fi
     fi
     if [[ -n "$cuda_lib_dir" && -d "$cuda_lib_dir" ]]; then
@@ -126,7 +133,7 @@ _verify_linking() {
         llama_warn "链接检查跳过：未指定二进制目录"
         return 0
     fi
-    local binary="${2:-llama-cli}"
+    local binary="${2:-${REQUIRED_BINARIES[0]}}"
     local pattern="$3"
     local label="$4"
     local not_found_msg="$5"
@@ -159,18 +166,18 @@ _verify_linking() {
 
 # Usage: _verify_cuda_linking <bin_dir> [binary] [ldd_output]
 _verify_cuda_linking() {
-    _verify_linking "${1:-}" "${2:-llama-cli}" "libcudart|libcublas|libcuda" "CUDA" "未找到 CUDA 动态库链接（可能是静态链接）" "${3:-}"
+    _verify_linking "${1:-}" "${2:-${REQUIRED_BINARIES[0]}}" "libcudart|libcublas|libcuda" "CUDA" "未找到 CUDA 动态库链接（可能是静态链接）" "${3:-}"
 }
 
 # Usage: _verify_openblas_linking <bin_dir> [binary] [ldd_output]
 _verify_openblas_linking() {
-    _verify_linking "${1:-}" "${2:-llama-cli}" "libopenblas|libblas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）" "${3:-}"
+    _verify_linking "${1:-}" "${2:-${REQUIRED_BINARIES[0]}}" "libopenblas|libblas" "OpenBLAS" "未找到 OpenBLAS 动态库链接（可能是静态链接或未启用）" "${3:-}"
 }
 
 # Usage: _verify_openblas_runtime <bin_dir> [binary] [ldd_output]
 _verify_openblas_runtime() {
     local bin_dir="$1"
-    local binary="${2:-llama-cli}"
+    local binary="${2:-${REQUIRED_BINARIES[0]}}"
     local ldd_output="${3:-}"
     local bin_path="${bin_dir}/${binary}"
 
@@ -272,14 +279,18 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
 
     llama_step "前置检查"
 
-    # shellcheck disable=SC2015
-    llama_check_commands \
+    # if/else 而非 A && B || C：llama_ok 的 printf 失败（写端关闭/文件系统满）
+    # 会被 || 分支误判为检查失败
+    if llama_check_commands \
         cmake "cmake" \
         gcc "gcc" \
         g++ "g++" \
         python3 "python3" \
-        flock "util-linux" \
-        && llama_ok "构建工具检查通过" || llama_die "构建工具检查失败"
+        flock "util-linux"; then
+        llama_ok "构建工具检查通过"
+    else
+        llama_die "构建工具检查失败"
+    fi
 
     # ninja 在 Debian/Ubuntu 上可能以 ninja-build 名称安装
     if ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null; then
