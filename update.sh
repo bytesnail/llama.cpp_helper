@@ -198,6 +198,16 @@ _cleanup_on_interrupt() {
     llama_safe_exit "$exit_code"
 }
 
+# Usage: _cleanup_on_clone_interrupt [exit_code]
+# clone 期间专用的中断清理（注册/解除均在 _ensure_source_repo 内）：
+# 清理半成品目录后按信号语义退出（130/143，与 _cleanup_on_interrupt 同形态）。
+_cleanup_on_clone_interrupt() {
+    local exit_code="${1:-130}"
+    llama_warn "克隆被中断，正在清理..."
+    _cleanup_clone_artifacts "$LLAMA_CPP_SRC"
+    llama_safe_exit "$exit_code"
+}
+
 # Usage: _cleanup_stale_submodules
 # 清理"旧版本遗留"的子模块目录。安全契约（任一不满足即跳过，保守不删除）：
 #   1. 白名单必须成功构建——git ls-files 失败时 return 1，绝不按空白名单删除
@@ -433,6 +443,54 @@ _parse_args() {
         fi
     fi
     printf -v "$_pa_result_var" '%s' "$_pa_target"
+}
+
+# Usage: _ensure_source_repo [url]
+# 首次安装场景：LLAMA_CPP_SRC 不存在或为空目录时自动克隆源码；
+# 非空目录 no-op（后续 _check_local_repo 的 fail-closed 检查不变）。
+# [url] 缺省 REPO_URL；参数主要为测试 seam（file:// 本地仓离线测试）。
+_ensure_source_repo() {
+    local url="${1:-$REPO_URL}"
+
+    if [[ -d "$LLAMA_CPP_SRC" ]]; then
+        # ls -A：空目录（无 . .. 以外条目）输出空；2>/dev/null 防 TOCTOU 竞态
+        if [[ -n "$(ls -A "$LLAMA_CPP_SRC" 2>/dev/null)" ]]; then
+            return 0  # 非空目录：no-op
+        fi
+        llama_info "源码目录为空: ${LLAMA_CPP_SRC}"
+    else
+        llama_info "源码目录不存在: ${LLAMA_CPP_SRC}"
+    fi
+    llama_info "首次使用，将自动克隆 llama.cpp 源码"
+
+    # clone 最小依赖；完整工具检查在 _check_local_repo（幂等重复无害）
+    llama_check_commands "git" "git" || llama_die "缺少 git，无法克隆源码"
+
+    # 父目录必须存在：不自动 mkdir -p，防止在错误挂载点静默创建目录树
+    local parent_dir
+    parent_dir=$(dirname -- "$LLAMA_CPP_SRC")
+    if [[ ! -d "$parent_dir" ]]; then
+        llama_err "父目录不存在: ${parent_dir}"
+        llama_die "请检查 LLAMA_CPP_SRC 路径拼写或挂载状态"
+    fi
+    llama_check_disk_space "$parent_dir" || llama_die
+
+    # clone 期间的中断清理 trap：注册窗口即"目录内无用户数据"的安全标记，
+    # clone 成功后立即解除（后续由 _check_local_repo 注册 _cleanup_on_interrupt 接管）
+    trap '_cleanup_on_clone_interrupt 130' SIGINT
+    trap '_cleanup_on_clone_interrupt 143' SIGTERM
+
+    local clone_rc=0
+    llama_with_network_context "克隆 llama.cpp 源码" \
+        _clone_repo "$url" "$LLAMA_CPP_SRC" || clone_rc=$?
+
+    trap - SIGINT SIGTERM
+
+    if [[ "$clone_rc" -ne 0 ]]; then
+        _cleanup_clone_artifacts "$LLAMA_CPP_SRC"
+        llama_die "克隆失败，已恢复到未安装状态"
+    fi
+    llama_ok "源码克隆完成"
 }
 
 # Usage: _normalize_src_path

@@ -845,3 +845,67 @@ MOCK_EOF
     run _cleanup_clone_artifacts "${TEST_TMPDIR}/never_existed"
     [ "$status" -eq 0 ]
 }
+
+@test "_ensure_source_repo no-op on non-empty directory" {
+    _load_update
+
+    # test_helper 已建好最小 git 仓库（非空）：url 不应被使用
+    local before
+    before=$(ls -A "$LLAMA_CPP_SRC")
+    run _ensure_source_repo "file:///unused"
+    [ "$status" -eq 0 ]
+    [ "$(ls -A "$LLAMA_CPP_SRC")" = "$before" ]
+}
+
+@test "_ensure_source_repo clones when directory missing" {
+    _load_update
+
+    local origin="${TEST_TMPDIR}/origin"
+    mkdir -p "$origin"
+    _init_git_repo "$origin"
+    git -C "$origin" tag b7000
+
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/fresh_src" run _ensure_source_repo "file://${origin}"
+    [ "$status" -eq 0 ]
+    [ -f "${TEST_TMPDIR}/fresh_src/.git/config" ]
+    [ "$(git -C "${TEST_TMPDIR}/fresh_src" tag)" = "b7000" ]
+}
+
+@test "_ensure_source_repo clones into empty directory" {
+    _load_update
+
+    local origin="${TEST_TMPDIR}/origin"
+    mkdir -p "$origin"
+    _init_git_repo "$origin"
+    mkdir -p "${TEST_TMPDIR}/empty_src"
+
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/empty_src" run _ensure_source_repo "file://${origin}"
+    [ "$status" -eq 0 ]
+    [ -f "${TEST_TMPDIR}/empty_src/.git/config" ]
+}
+
+@test "_ensure_source_repo fails when parent directory missing" {
+    _load_update
+
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/no_such_parent/src" run _ensure_source_repo "file:///unused"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "父目录不存在" ]]
+    [[ ! -e "${TEST_TMPDIR}/no_such_parent/src" ]]
+}
+
+@test "_ensure_source_repo cleans up after failed clone (missing dir start)" {
+    _load_update
+
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/fail_src" run _ensure_source_repo "file://${TEST_TMPDIR}/no-such-repo"
+    [ "$status" -ne 0 ]
+    [[ ! -e "${TEST_TMPDIR}/fail_src" ]]
+}
+
+@test "_ensure_source_repo cleans up after failed clone (empty dir start)" {
+    _load_update
+
+    mkdir -p "${TEST_TMPDIR}/fail_empty"
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/fail_empty" run _ensure_source_repo "file://${TEST_TMPDIR}/no-such-repo"
+    [ "$status" -ne 0 ]
+    [[ ! -e "${TEST_TMPDIR}/fail_empty" ]]
+}
