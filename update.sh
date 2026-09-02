@@ -72,6 +72,33 @@ _git_net() {
         git -C "$LLAMA_CPP_SRC" "$@"
 }
 
+# Usage: _clone_repo <url> <dest>
+# 完整克隆 <url> 到 <dest>（首次安装场景，由 _ensure_source_repo 调用）。
+# 低速保护与 _git_net 同源（同一对 config.sh 常量）：对端半挂起时中止传输。
+# 不加 --quiet：clone 是数百 MB 的首次大下载，tty 下 git 自适应显示进度。
+# 失败时目录清理由调用点负责（git 自身也会清理其创建的目录）。
+# 注：clone 无法带 -C（dest 尚不存在）——C3 契约测试中的登记豁免行。
+_clone_repo() {
+    local url="$1"
+    local dest="$2"
+    llama_info "正在从 ${url} 克隆 llama.cpp 源码..."
+    env GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT}" \
+        GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME}" \
+        git clone -- "$url" "$dest"
+}
+
+# Usage: _cleanup_clone_artifacts <path>
+# 删除 clone 半成品目录，恢复"未安装"状态；目录不存在时静默通过。
+# 安全不变量：仅可在 _ensure_source_repo 判定目录缺失/为空之后调用
+# （目录内无用户数据），trap 注册窗口本身即该标记。
+_cleanup_clone_artifacts() {
+    local path="$1"
+    if [[ -d "$path" ]]; then
+        llama_warn "清理未完成的克隆目录: ${path}"
+        rm -rf -- "$path"
+    fi
+}
+
 # Usage: _ensure_lock_for_rollback
 # 回滚修改源码树前的持锁策略（_build_with_rollback 与 _cleanup_on_interrupt
 # 共用）：本进程已持锁（LOCK_FD 非空）则跳过；否则重取——取锁失败不阻塞

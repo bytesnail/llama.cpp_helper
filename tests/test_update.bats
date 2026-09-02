@@ -805,3 +805,43 @@ MOCK_EOF
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 1 ]
 }
+
+@test "_clone_repo clones a local file:// repo with tags" {
+    _load_update
+
+    # 本地仓作 file:// origin:离线真实 clone(tags 随 clone 就位)
+    local origin="${TEST_TMPDIR}/origin"
+    mkdir -p "$origin"
+    _init_git_repo "$origin"
+    git -C "$origin" tag b7000
+
+    local dest="${TEST_TMPDIR}/clone_dest"
+    run _clone_repo "file://${origin}" "$dest"
+    [ "$status" -eq 0 ]
+    [ -f "${dest}/.git/config" ]
+    [ "$(git -C "$dest" tag)" = "b7000" ]
+}
+
+@test "_clone_repo fails for non-existent url" {
+    _load_update
+
+    run _clone_repo "file://${TEST_TMPDIR}/no-such-repo" "${TEST_TMPDIR}/clone_dest_fail"
+    [ "$status" -ne 0 ]
+}
+
+@test "_cleanup_clone_artifacts removes directory" {
+    _load_update
+
+    local dest="${TEST_TMPDIR}/half_cloned"
+    mkdir -p "${dest}/.git"
+    run _cleanup_clone_artifacts "$dest"
+    [ "$status" -eq 0 ]
+    [[ ! -d "$dest" ]]
+}
+
+@test "_cleanup_clone_artifacts tolerates missing directory" {
+    _load_update
+
+    run _cleanup_clone_artifacts "${TEST_TMPDIR}/never_existed"
+    [ "$status" -eq 0 ]
+}

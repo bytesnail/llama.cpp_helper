@@ -119,12 +119,13 @@ load test_helper
     # 第二个 grep 放行紧跟 -C "$LLAMA_CPP_SRC" 的调用——含恢复指引在双引号
     # 字符串内的转义形态 -C \"${LLAMA_CPP_SRC}\"（空格路径下指引可复制执行）。
     # 已知局限（行级检查）：submodule foreach 的内层 'git diff' 由 foreach 自身
-    # 提供 cwd，属合法裸调用，靠同行的外层 git -C 放行。
+    # 提供 cwd，属合法裸调用，靠同行的外层 git -C 放行；git clone 是结构性
+    # 例外（目标目录尚不存在，-C 无意义），集中在 _clone_repo 一行并在此登记。
     local violations
     violations=$(grep -vE '^[[:space:]]*#' "${BATS_TEST_DIRNAME}/../update.sh" \
         | sed 's/[[:space:]]#.*$//' \
         | grep -nE 'git[[:space:]]' \
-        | grep -vE 'git[[:space:]]+-C[[:space:]]+\\?"?\$\{?LLAMA_CPP_SRC\}?\\?"?' || true)
+        | grep -vE 'git[[:space:]]+-C[[:space:]]+\\?"?\$\{?LLAMA_CPP_SRC\}?\\?"?|git[[:space:]]+clone' || true)
     if [ -n "$violations" ]; then
         printf 'bare git invocation(s):\n%s\n' "$violations"
     fi
