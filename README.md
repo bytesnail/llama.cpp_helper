@@ -72,26 +72,30 @@
 git clone https://github.com/YOUR_USERNAME/llama.cpp_helper  # 请替换 YOUR_USERNAME
 cd llama.cpp_helper
 
-# 1. 克隆 llama.cpp 到相邻目录
-git clone https://github.com/ggml-org/llama.cpp ../llama.cpp
+# 1. 一键更新——首次使用会自动克隆 llama.cpp 源码（到 ../llama.cpp）并构建最新 release
+bash update.sh
 
-# 2. 构建
-bash build.sh
-
-# 3. 加载运行时环境
+# 2. 加载运行时环境
 source run_env.sh
 
-# 4. 运行模型推理
+# 3. 运行模型推理
 ../llama.cpp/build/bin/llama-cli \
     -m /path/to/model.gguf \
     -ngl 99 \
     -p "你好"
 
-# 5. 运行模型服务
+# 4. 运行模型服务
 ../llama.cpp/build/bin/llama-server \
     -m /path/to/model.gguf \
     -ngl 99 \
     --port 8080
+```
+
+如需自定义源码位置，先手动克隆再经 `LLAMA_CPP_SRC` 指向它：
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp /your/path/llama.cpp
+LLAMA_CPP_SRC=/your/path/llama.cpp bash update.sh
 ```
 
 ### 日常更新

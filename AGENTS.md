@@ -88,7 +88,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 | 需求 | 位置 | 备注 |
 |------|------|------|
 | 修改构建逻辑 | `build.sh` → `main()` | main() 包含参数解析和全部构建逻辑 |
-| 修改更新逻辑 | `update.sh` → `_resolve_target()` / `_update_source()` / `_build_with_rollback()` | 决策 → 切换 → 构建 → 回滚链路 |
+| 修改更新逻辑 | `update.sh` → `_ensure_source_repo()` / `_resolve_target()` / `_update_source()` / `_build_with_rollback()` | 首装克隆 → 决策 → 切换 → 构建 → 回滚链路 |
 | 添加新工具函数 | `common.sh` | 遵循 `llama_` 公开 / `_` 私有两级命名 |
 | 修改配置默认值 | `config.sh` | 所有变量用 `${VAR:-default}` 模式 |
 | 添加/删除构建旋钮 | `config.sh` → `LLAMA_CMAKE_KNOBS` | 定义变量 + 登记旋钮表；`build.sh` 循环生成 `-D`，无需改动 |
@@ -160,6 +160,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 ## 安全特性
 
+- **首次自动克隆**：`update.sh` 在 `LLAMA_CPP_SRC` 缺失/为空时自动完整克隆（`_ensure_source_repo`）；clone 失败/中断（SIGINT/SIGTERM 分信号 trap）清理半成品目录恢复"未安装"状态，trap 注册窗口即"目录内无用户数据"不变量；父目录不存在时 die（不自动创建目录树，防错误挂载点）；`git clone` 是 C3 `git -C` 契约的登记豁免（目标不存在时 `-C` 无意义，集中在 `_clone_repo` 一行）
 - **文件锁**：`flock` + 动态 FD（`exec {fd}>>`），`build.sh` 和 `update.sh` 互斥，均在参数解析**之后**获取（`--help`/`--version` 不受锁占用影响）；`update.sh` 在调用 `build.sh` 前释放锁以避免死锁，构建失败进入回滚前重新取锁（回滚修改源码树，防止与并发进程交错）
 - **构建失败清理**：`build.sh` 通过双重 trap（SIGINT/SIGTERM 显式退出码 + EXIT）删除未完成构建目录
 - **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义；用户指定的裸 commit 按 7-40 位 hex 经 `rev-parse` 通用解析（短/完整 SHA），同名纯 hex tag 优先按 tag 处理；中断恢复与构建失败回滚执行前均须持有文件锁（`_cleanup_on_interrupt` 经 `LOCK_FD` 判断本进程持锁状态，构建成功后经 `llama_cleanup_trap` 解除中断恢复 trap，成功事务不可被信号撤销）
