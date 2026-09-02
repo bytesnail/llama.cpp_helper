@@ -346,6 +346,13 @@ Expected: 全部 PASS（含 Task 1 的红灯用例）。
 Run: `make check`
 Expected: lint（shellcheck）+ syntax + 全部测试 PASS。
 
+> 执行记录：首轮 `make check` 暴露一个与本任务无关的既有环境性问题——
+> 用户全局 `~/.gitconfig` 设 `tag.gpgsign=true`，`git tag` 在测试仓转为
+> 带签名附注标签而在 bats 中非交互失败（test_update.bats 187 号用例）。
+> 修复：`_init_git_repo`（tests/test_helper.bash）在沙盒仓局部
+> `git config tag.gpgsign false` + `commit.gpgsign false`（不动全局配置，
+> 符合测试夹具纪律），单独以 test 提交落地。
+
 - [ ] **Step 4: Commit**
 
 ```bash

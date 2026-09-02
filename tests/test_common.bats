@@ -603,8 +603,12 @@ teardown() {
 }
 
 @test "llama_activate_conda returns 0 when no conda found" {
+    # 真正模拟"无 conda"：假 HOME（常见路径候选落空）+ 精简 PATH
+    #（command -v conda 找不到——真实 conda 在 /mnt/usr/tools/... 不在其中）
     unset CONDA_EXE CONDA_PREFIX CONDA_DEFAULT_ENV
-    run llama_activate_conda
+    local empty_home="${TEST_TMPDIR}/empty_home"
+    mkdir -p "$empty_home"
+    HOME="$empty_home" PATH="/usr/bin:/bin" run llama_activate_conda
     [ "$status" -eq 0 ]
 }
 
