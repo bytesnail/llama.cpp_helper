@@ -626,8 +626,10 @@ setup() {
 
 @test "llama_activate_conda short-circuits when target env already active" {
     # 目标即当前环境（默认 base）时短路，不进入发现/切换路径。
-    # 必须显式控制 CONDA_DEFAULT_ENV——测试进程继承开发机 base 激活状态
-    CONDA_PREFIX="/fake/conda" CONDA_DEFAULT_ENV=base CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+    # 必须显式控制 CONDA_DEFAULT_ENV 与 CONDA_ENV_NAME——测试进程继承开发机
+    # base 激活状态与真实构建环境名（CONDA_ENV_NAME=llama.cpp），后者会把
+    # 目标从 base 改写为 llama.cpp，短路路径不可达（已实证假红）
+    CONDA_PREFIX="/fake/conda" CONDA_DEFAULT_ENV=base CONDA_ENV_NAME=base CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
     [[ "$output" =~ "conda 环境已激活" ]]
 }
