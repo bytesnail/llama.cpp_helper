@@ -396,14 +396,23 @@ llama_print_hardware_summary() {
 # --- conda 环境 -----------------------------------------------
 # Usage: llama_activate_conda
 # 检测并激活 conda 环境。遵循 config.sh 中的 CONDA_AUTO_ACTIVATE
-# 和 CONDA_ENV_NAME 设置。永不失败 — 始终返回 0。
+# 和 CONDA_ENV_NAME 设置。CONDA_ENV_NAME 恒为权威：当前激活的是
+# 其他环境时强制切换；已定位 conda 但激活失败（环境不存在等）
+# 返回 1。找不到 conda 安装 / 缺 conda.sh 时软跳过返回 0
+# （conda 仅为可选工具链来源，CUDA 亦可系统级安装）。
 llama_activate_conda() {
     if [[ "${CONDA_AUTO_ACTIVATE:-1}" != "1" ]]; then
         return 0
     fi
 
-    if [[ -n "${CONDA_PREFIX:-}" ]]; then
-        llama_info "conda 环境已激活: ${CONDA_PREFIX}"
+    local target_env="${CONDA_ENV_NAME:-base}"
+
+    # 已在目标环境则短路。必须用 CONDA_DEFAULT_ENV 比较——base 环境的
+    # CONDA_PREFIX 是安装根（basename 是 anaconda 而非 base）。
+    # CONDA_DEFAULT_ENV 缺失但 CONDA_PREFIX 存在时无法可靠判断，
+    # 按需要切换处理（conda activate 幂等，安全）。
+    if [[ -n "${CONDA_DEFAULT_ENV:-}" && "$CONDA_DEFAULT_ENV" == "$target_env" ]]; then
+        llama_info "conda 环境已激活: ${CONDA_PREFIX:-$target_env}"
         return 0
     fi
 
@@ -463,24 +472,26 @@ llama_activate_conda() {
     # shellcheck source=/dev/null
     source "$conda_sh"
 
-    local env_name="${CONDA_ENV_NAME:-base}"
     # 直接执行 conda activate（不在命令替换子 shell 中执行，否则环境变更会丢失）
+    local activate_rc=0
     local conda_err_file
     conda_err_file=$(mktemp "${TMPDIR:-/tmp}/conda_activate_err.XXXXXX" 2>/dev/null) || conda_err_file=""
     if [[ -n "$conda_err_file" ]]; then
-        if conda activate "$env_name" 2>"$conda_err_file"; then
-            llama_ok "已激活 conda 环境: ${env_name}"
+        if conda activate "$target_env" 2>"$conda_err_file"; then
+            llama_ok "已激活 conda 环境: ${target_env}"
         else
-            llama_warn "conda 环境激活失败: ${env_name}"
+            activate_rc=1
+            llama_err "conda 环境激活失败: ${target_env}（环境不存在？请用 conda env list 确认，或检查 CONDA_ENV_NAME 设置）"
             llama_detail "$(cat "$conda_err_file" 2>/dev/null || true)"
         fi
         rm -f "$conda_err_file"
     else
         # 无法创建临时文件，回退到静默模式（不捕获 stderr）
-        if conda activate "$env_name" 2>/dev/null; then
-            llama_ok "已激活 conda 环境: ${env_name}"
+        if conda activate "$target_env" 2>/dev/null; then
+            llama_ok "已激活 conda 环境: ${target_env}"
         else
-            llama_warn "conda 环境激活失败: ${env_name}"
+            activate_rc=1
+            llama_err "conda 环境激活失败: ${target_env}（环境不存在？请用 conda env list 确认，或检查 CONDA_ENV_NAME 设置）"
         fi
     fi
 
@@ -492,7 +503,7 @@ llama_activate_conda() {
     if ((restore_u)); then set -u; else set +u; fi
     if ((restore_e)); then set -e; else set +e; fi
 
-    return 0
+    return "$activate_rc"
 }
 
 # --- 文件锁 --------------------------------------------------
