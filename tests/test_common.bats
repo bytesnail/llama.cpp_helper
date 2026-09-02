@@ -438,6 +438,7 @@ teardown() {
         > "${mock_e}/etc/profile.d/conda.sh"
     run bash -c "
         set -euo pipefail
+        unset CONDA_PREFIX CONDA_DEFAULT_ENV
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
         CONDA_EXE='${mock_e}/bin/conda' CONDA_AUTO_ACTIVATE=1 llama_activate_conda >/dev/null 2>&1
         set -o | grep -q 'errexit.*on'
@@ -593,14 +594,16 @@ teardown() {
     [[ "$output" != *"conda"* ]]
 }
 
-@test "llama_activate_conda skips when already activated (CONDA_PREFIX set)" {
-    CONDA_PREFIX="/fake/conda/env" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
+@test "llama_activate_conda short-circuits when target env already active" {
+    # 目标即当前环境（默认 base）时短路，不进入发现/切换路径。
+    # 必须显式控制 CONDA_DEFAULT_ENV——测试进程继承开发机 base 激活状态
+    CONDA_PREFIX="/fake/conda" CONDA_DEFAULT_ENV=base CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
     [[ "$output" =~ "conda 环境已激活" ]]
 }
 
 @test "llama_activate_conda returns 0 when no conda found" {
-    unset CONDA_EXE CONDA_PREFIX
+    unset CONDA_EXE CONDA_PREFIX CONDA_DEFAULT_ENV
     run llama_activate_conda
     [ "$status" -eq 0 ]
 }
@@ -612,6 +615,8 @@ teardown() {
     _make_stub_exec "${mock_base}/bin/conda"
     echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_base}'/envs/${2:-base}"; return 0; fi; }' \
         > "${mock_base}/etc/profile.d/conda.sh"
+    # 不走短路路径：显式清除继承自开发机的 base 激活状态
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV
     CONDA_EXE="${mock_base}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
     [[ "$output" =~ "已激活 conda 环境" ]]
@@ -622,10 +627,33 @@ teardown() {
     mkdir -p "${mock_home}/miniconda3/etc/profile.d"
     echo 'conda() { if [[ "$1" == "activate" ]]; then export CONDA_PREFIX="'${mock_home}'/miniconda3/envs/${2:-base}"; return 0; fi; }' \
         > "${mock_home}/miniconda3/etc/profile.d/conda.sh"
-    unset CONDA_EXE CONDA_PREFIX
+    unset CONDA_EXE CONDA_PREFIX CONDA_DEFAULT_ENV
     HOME="$mock_home" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
     [[ "$output" =~ "已激活 conda 环境" ]]
+}
+
+@test "llama_activate_conda switches to CONDA_ENV_NAME when another env is active" {
+    # 权威语义核心：当前激活 other 环境，显式指定 myenv，必须强制切换
+    local mock_base="${TEST_TMPDIR}/mock_switch"
+    mkdir -p "${mock_base}/etc/profile.d" "${mock_base}/bin"
+    _make_stub_exec "${mock_base}/bin/conda"
+    cat > "${mock_base}/etc/profile.d/conda.sh" <<EOF
+conda() {
+    if [[ "\$1" == "activate" ]]; then
+        echo "activate \$2" >> "${mock_base}/activate.log"
+        export CONDA_PREFIX="${mock_base}/envs/\${2:-base}"
+        export CONDA_DEFAULT_ENV="\${2:-base}"
+        return 0
+    fi
+}
+EOF
+    CONDA_PREFIX="/fake/other" CONDA_DEFAULT_ENV=other CONDA_ENV_NAME=myenv \
+        CONDA_EXE="${mock_base}/bin/conda" CONDA_AUTO_ACTIVATE=1 \
+        run llama_activate_conda
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "已激活 conda 环境: myenv" ]]
+    grep -q "activate myenv" "${mock_base}/activate.log"
 }
 
 @test "llama_activate_conda warns when conda.sh missing" {
@@ -633,21 +661,28 @@ teardown() {
     mkdir -p "${mock_broken}/bin"
     _make_stub_exec "${mock_broken}/bin/conda"
     # Intentionally do NOT create etc/profile.d/conda.sh — simulate broken install
+    # 不走短路路径：显式清除继承自开发机的 base 激活状态
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV
     CONDA_EXE="${mock_broken}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
     [ "$status" -eq 0 ]
     [[ "$output" =~ "缺少 shell 初始化脚本" ]]
 }
 
-@test "llama_activate_conda warns on conda activate failure" {
+@test "llama_activate_conda returns 1 on conda activate failure" {
+    # 权威语义：显式指定的环境激活失败 → 硬报错返回 1（build.sh/update.sh
+    # 的裸调用在 set -e 下随之中止）
     local mock_fail="${TEST_TMPDIR}/mock_fail"
     mkdir -p "${mock_fail}/etc/profile.d"
     mkdir -p "${mock_fail}/bin"
     _make_stub_exec "${mock_fail}/bin/conda"
     echo 'conda() { if [[ "$1" == "activate" ]]; then echo "环境不存在" >&2; return 1; fi; }' \
         > "${mock_fail}/etc/profile.d/conda.sh"
-    CONDA_EXE="${mock_fail}/bin/conda" CONDA_AUTO_ACTIVATE=1 run llama_activate_conda
-    [ "$status" -eq 0 ]
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV
+    CONDA_ENV_NAME=no_such_env CONDA_EXE="${mock_fail}/bin/conda" CONDA_AUTO_ACTIVATE=1 \
+        run llama_activate_conda
+    [ "$status" -eq 1 ]
     [[ "$output" =~ "conda 环境激活失败" ]]
+    [[ "$output" =~ "no_such_env" ]]
     [[ "$output" =~ "环境不存在" ]]
 }
 
@@ -777,6 +812,7 @@ conda() {
 CONDAEOF
     CONDA_EXE="${mock_setu}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
+        unset CONDA_PREFIX CONDA_DEFAULT_ENV
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
         llama_activate_conda
         echo SURVIVED
@@ -785,7 +821,8 @@ CONDAEOF
     [[ "$output" =~ "SURVIVED" ]]
 }
 
-@test "llama_activate_conda survives set -e when conda activate fails" {
+@test "llama_activate_conda aborts set -e caller when conda activate fails" {
+    # 新契约：激活失败返回 1，set -e 调用方（build.sh/update.sh 的裸调用）随之中止
     local mock_sete="${TEST_TMPDIR}/mock_sete"
     mkdir -p "${mock_sete}/etc/profile.d"
     mkdir -p "${mock_sete}/bin"
@@ -800,8 +837,34 @@ conda() {
 CONDAEOF
     CONDA_EXE="${mock_sete}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
+        unset CONDA_PREFIX CONDA_DEFAULT_ENV
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
         llama_activate_conda
+        echo SURVIVED
+    "
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"SURVIVED"* ]]
+    [[ "$output" =~ "conda 环境激活失败" ]]
+}
+
+@test "llama_activate_conda failure can be tolerated with || true under set -e" {
+    # 调用方显式 || true 可容忍失败（run_env.sh 场景：错误已打印，流程继续）
+    local mock_tol="${TEST_TMPDIR}/mock_tol"
+    mkdir -p "${mock_tol}/etc/profile.d"
+    mkdir -p "${mock_tol}/bin"
+    _make_stub_exec "${mock_tol}/bin/conda"
+    cat > "${mock_tol}/etc/profile.d/conda.sh" <<'CONDAEOF'
+conda() {
+    if [[ "$1" == "activate" ]]; then
+        return 1
+    fi
+}
+CONDAEOF
+    CONDA_EXE="${mock_tol}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
+        set -euo pipefail
+        unset CONDA_PREFIX CONDA_DEFAULT_ENV
+        source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
+        llama_activate_conda || true
         echo SURVIVED
     "
     [ "$status" -eq 0 ]
@@ -823,6 +886,7 @@ conda() {
 CONDAEOF
     CONDA_EXE="${mock_restore}/bin/conda" CONDA_AUTO_ACTIVATE=1 run bash -c "
         set -euo pipefail
+        unset CONDA_PREFIX CONDA_DEFAULT_ENV
         source '${BATS_TEST_DIRNAME}/../common.sh' 2>/dev/null || true
         llama_activate_conda
         # After llama_activate_conda returns, set -u should be active again
