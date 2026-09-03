@@ -51,8 +51,9 @@ unset _llama_boot_dir
 # 是否存在，关闭须 unset）| value（读取变量值）
 declare -A _LLAMA_RUN_ENV_VARS=(
     ["GGML_CUDA_P2P"]="1|presence|启用 GPU 间 P2P 直传（NVLink）——存在性语义：llama.cpp 仅检测变量是否存在，置 0 不关闭，关闭须 unset"
-    ["CUDA_SCALE_LAUNCH_QUEUES"]="4x|value|增大 CUDA 命令缓冲区（多 GPU 并行受益）"
 )
+# 注：CUDA_SCALE_LAUNCH_QUEUES 已移除——llama.cpp v0.3.0 源码中不存在该变量
+# （全仓 grep 无 getenv 消费者），导出后无任何效果
 
 # Usage: _env_var_value <name> / _env_var_sem <name> / _env_var_desc <name>
 # "值|语义|描述" 格式的统一解析点（_show_env_vars 与 main 设置循环共用）

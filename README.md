@@ -233,7 +233,6 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 | `CMAKE_BUILD_TYPE` | `Release` | 构建类型 |
 | `CMAKE_CUDA_ARCHITECTURES` | `75` | CUDA 目标架构 (sm_75) |
 | `CMAKE_CUDA_FLAGS` | `--threads=0` | CUDA 编译附加参数 |
-| `GGML_CUDA_PEER_MAX_BATCH_SIZE` | `512` | NVLink P2P 批量大小 |
 | `GGML_CUDA_FA_ALL_QUANTS` | `ON` | 全量化 FlashAttention |
 | `GGML_CUDA_GRAPHS` | `OFF` | CUDA graphs（固定 shape 推理受益，默认保持上游） |
 | `GGML_NATIVE` | `ON` | 本机 CPU 优化 |
@@ -256,7 +255,7 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 | `REPO_URL` | `https://github.com/ggml-org/llama.cpp` | GitHub 仓库 URL（update.sh remote 验证） |
 | `_LLAMA_PROJECT_ROOT` | 自动检测 | 本项目的绝对路径（用于计算默认 `LLAMA_CPP_SRC`） |
 | `BUILD_DIR` / `BUILD_BIN_DIR` / `BUILD_STAMP` | `${LLAMA_CPP_SRC}/build` 及其子路径 | 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议） |
-| `LLAMA_CMAKE_KNOBS` | 上表 11 个构建变量名 | 构建旋钮表：build.sh 按此表循环生成 cmake `-D` 透传参数 |
+| `LLAMA_CMAKE_KNOBS` | 上表 10 个构建变量名 | 构建旋钮表：build.sh 按此表循环生成 cmake `-D` 透传参数 |
 **使用示例：**
 
 ```bash
@@ -308,7 +307,6 @@ CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 | 变量 | 值 | 说明 |
 |------|-----|------|
 | `GGML_CUDA_P2P` | `1` | 启用 GPU 间 P2P 直传（NVLink 绕过系统内存）。**存在性语义**：llama.cpp 仅检测变量是否存在——置 `0` 不关闭，关闭须 `unset GGML_CUDA_P2P` |
-| `CUDA_SCALE_LAUNCH_QUEUES` | `4x` | 增大 CUDA 命令缓冲区（多 GPU 并行受益） |
 
 > 若变量已被用户预先设置（`export`），`run_env.sh` 会保留用户值而非覆盖。
 

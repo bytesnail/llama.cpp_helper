@@ -49,16 +49,11 @@ load test_helper
     [[ "$output" =~ "GGML_CUDA_P2P" ]]
 }
 
-@test "run_env.sh sets CUDA_SCALE_LAUNCH_QUEUES=4x" {
-    run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' && echo \$CUDA_SCALE_LAUNCH_QUEUES"
+@test "run_env.sh no longer exports CUDA_SCALE_LAUNCH_QUEUES (removed upstream in v0.3.0)" {
+    # 上游 v0.3.0 源码无该变量（无 getenv 消费者），导出无效果——防止复活
+    run bash -c "source '${BATS_TEST_DIRNAME}/../run_env.sh' 2>/dev/null; echo \${CUDA_SCALE_LAUNCH_QUEUES:-UNSET}"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "4x" ]]
-}
-
-@test "run_env.sh preserves pre-set CUDA_SCALE_LAUNCH_QUEUES" {
-    run bash -c "export CUDA_SCALE_LAUNCH_QUEUES=8x; source '${BATS_TEST_DIRNAME}/../run_env.sh' 2>/dev/null; echo \$CUDA_SCALE_LAUNCH_QUEUES"
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "8x" ]]
+    [[ "$output" =~ "UNSET" ]]
 }
 
 @test "run_env.sh warns that GGML_CUDA_P2P=0 does not disable P2P" {
