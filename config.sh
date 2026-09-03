@@ -19,14 +19,11 @@ fi
 _LLAMA_CONFIG_SOURCED=1
 
 # --- 路径 ----------------------------------------------------
-# 可通过环境变量覆盖；默认为与本项目相邻的 llama.cpp 目录
-# _LLAMA_PROJECT_ROOT 同样允许预设（测试用 fake root 注入）
-# cd 的 >/dev/null：CDPATH 非空且经相对路径 source 时，cd 会把命中路径打到
-# stdout（且可能优先命中 CDPATH 条目），命令替换会捕获到两行/错误路径——
-# 与 build.sh / update.sh / run_env.sh 三处同款 cd 的既有防护对齐
-_LLAMA_PROJECT_ROOT="${_LLAMA_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)}"
-readonly _LLAMA_PROJECT_ROOT
-LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-${_LLAMA_PROJECT_ROOT}/../llama.cpp}"
+# 可通过环境变量覆盖；默认为本机事实标准目录（与 ~/.bashrc 的同名 export
+# 对齐的配置层落地）：非交互上下文（cron/systemd 等）不加载 bashrc，若默认
+# 仍按相邻布局解析为 <本项目>/../llama.cpp，update.sh 的首次自动克隆会在
+# 错误位置静默克隆出第二份源码。其他机器使用本项目时显式设置 LLAMA_CPP_SRC。
+LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-/mnt/usr/tools/llama.cpp}"
 
 # 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议，单一定义）
 BUILD_DIR="${BUILD_DIR:-${LLAMA_CPP_SRC}/build}"
@@ -86,7 +83,7 @@ declare -ar LLAMA_CMAKE_KNOBS=(
 
 # --- conda 配置 ----------------------------------------------
 CONDA_AUTO_ACTIVATE="${CONDA_AUTO_ACTIVATE:-1}"     # 0=跳过, 1=自动激活
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-base}"             # 要激活的 conda 环境名称（权威：已激活其他环境时强制切换；激活失败 build.sh/update.sh 报错中止）
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-llama.cpp}"        # 要激活的 conda 环境名称（默认为本机构建专用环境，CUDA 工具链所在；权威：已激活其他环境时强制切换；激活失败 build.sh/update.sh 报错中止）
 
 # --- 网络超时配置（可通过环境变量覆盖） -----------------------
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-10}"  # 秒；update.sh HTTP 连接超时

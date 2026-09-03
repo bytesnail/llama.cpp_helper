@@ -2,7 +2,7 @@
 
 本文档为本项目的 AI 编码代理（Claude Code、opencode 等）提供统一上下文，面向修改脚本的开发者。`CLAUDE.md` 是指向本文件的软链接，两套工具读取同一份内容。用户文档（快速开始、配置、故障排除）见 [README.md](README.md)。
 
-> 本项目是针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理 **Bash 脚本工具集**，面向双路 RTX 2080 Ti (NVLink) 工作站调优。**不含 C/C++ 代码**——通过调用 CMake/Ninja/git 等外部工具构建位于相邻目录 `../llama.cpp` 的上游源码。
+> 本项目是针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理 **Bash 脚本工具集**，面向双路 RTX 2080 Ti (NVLink) 工作站调优。**不含 C/C++ 代码**——通过调用 CMake/Ninja/git 等外部工具构建位于 `/mnt/usr/tools/llama.cpp` 的上游源码（`LLAMA_CPP_SRC` 可覆盖）。
 
 ## 语言策略
 
@@ -152,7 +152,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 4. **绝不在 Python 中嵌入字段名** — 使用 `sys.argv` 传递字段名避免 Python 注入（参考 `_parse_release_json`）
 5. **source 脚本绝不污染父 shell 颜色变量** — 颜色变量名清单（`_LLAMA_COLOR_VARS`）在 `common.sh` 单一定义；`common.sh` 被 source 时先自动 `llama_save_colors` 保存父 shell 原值，`run_env.sh` 退出时由 `llama_restore_colors` 恢复（unset 与空串不做区分，恢复为空串）
 6. **绝不启用** `GGML_CUDA_ENABLE_UNIFIED_MEMORY` — 离散 GPU（RTX 2080 Ti）有害。仅集成 GPU 或 OOM 时手动启用
-7. **绝不在测试中修改生产环境的 llama.cpp 仓库** — 所有测试操作必须在 `tests/test_helper.bash` 创建的临时目录中进行。`_setup_tmpdir()` 自动创建 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它，`teardown` 时自动清理。测试需不同仓库时显式覆盖 `LLAMA_CPP_SRC`，但不得指向 `_LLAMA_PROJECT_ROOT/../llama.cpp`（生产路径）
+7. **绝不在测试中修改生产环境的 llama.cpp 仓库** — 所有测试操作必须在 `tests/test_helper.bash` 创建的临时目录中进行。`_setup_tmpdir()` 自动创建 `${TEST_TMPDIR}/llama.cpp` 最小 git 仓库并 export `LLAMA_CPP_SRC` 指向它，`teardown` 时自动清理。测试需不同仓库时显式覆盖 `LLAMA_CPP_SRC`，但不得指向 `/mnt/usr/tools/llama.cpp`（生产路径）
 8. **绝不写无保护的 `var=$(pipeline)` 赋值**（当管线可能返回非零时）— 在 `set -euo pipefail` 下，`grep` 无匹配、外部工具缺失等场景会使管线返回非零，赋值语句中止脚本。若函数设计了优雅降级（输出空串/0/回退值），必须用 `var=$(... || true)` 保护。参考 `common.sh` 的 `_llama_lscpu_field`、`llama_get_gpu_count`、`llama_hw_mem_total_bytes`、`llama_print_hardware_summary` 和 `run_env.sh` 的 `gpu_count=$(llama_get_gpu_count || true)`
 9. **绝不给无命令的 `exec {fd}>&-` 加输出重定向**（如 `2>/dev/null`）— 无命令 `exec` 的重定向会**永久改变当前 shell 的 FD**（实测吞掉后续全部 stderr 输出，含 `llama_safe_exit` 前的错误消息）。bash 关闭已关闭的 fd 静默返回 0，无需屏蔽。参考 `llama_release_lock`、`_lock_grab`、测试 teardown
 10. **绝不用 `git checkout <tag名>` 切换版本** — 本地存在同名分支时 git 按歧义规则优先取分支，会静默构建错误 commit。必须先 `git rev-parse --verify --quiet "refs/tags/<tag>^{commit}"` 解析到 SHA 再 checkout SHA（参考 `update.sh` 的 `_update_source`）

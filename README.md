@@ -229,7 +229,7 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LLAMA_CPP_SRC` | `../llama.cpp`（相对于本项目） | llama.cpp 源码路径 |
+| `LLAMA_CPP_SRC` | `/mnt/usr/tools/llama.cpp` | llama.cpp 源码路径（本机事实标准目录；其他机器使用时经环境变量覆盖） |
 | `CMAKE_BUILD_TYPE` | `Release` | 构建类型 |
 | `CMAKE_CUDA_ARCHITECTURES` | `75` | CUDA 目标架构 (sm_75) |
 | `CMAKE_CUDA_FLAGS` | `--threads=0` | CUDA 编译附加参数 |
@@ -253,7 +253,6 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 |------|-----|------|
 | `REPO` | `ggml-org/llama.cpp` | GitHub 仓库标识（update.sh 查询） |
 | `REPO_URL` | `https://github.com/ggml-org/llama.cpp` | GitHub 仓库 URL（update.sh remote 验证） |
-| `_LLAMA_PROJECT_ROOT` | 自动检测 | 本项目的绝对路径（用于计算默认 `LLAMA_CPP_SRC`） |
 | `BUILD_DIR` / `BUILD_BIN_DIR` / `BUILD_STAMP` | `${LLAMA_CPP_SRC}/build` 及其子路径 | 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议） |
 | `LLAMA_CMAKE_KNOBS` | 上表 10 个构建变量名 | 构建旋钮表：build.sh 按此表循环生成 cmake `-D` 透传参数 |
 **使用示例：**
@@ -276,7 +275,7 @@ LLAMA_CPP_SRC="/your/path/to/llama.cpp" bash build.sh
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `CONDA_AUTO_ACTIVATE` | `1` | 自动激活 conda 环境（0=跳过, 1=自动激活） |
-| `CONDA_ENV_NAME` | `base` | 激活的 conda 环境名称（权威：当前激活其他环境时强制切换；环境不存在/激活失败时 build.sh/update.sh 报错中止） |
+| `CONDA_ENV_NAME` | `llama.cpp` | 激活的 conda 环境名称（默认为本机构建专用环境，CUDA 工具链所在；权威：当前激活其他环境时强制切换；环境不存在/激活失败时 build.sh/update.sh 报错中止） |
 
 ```bash
 # 跳过 conda 自动激活

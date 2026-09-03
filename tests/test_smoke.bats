@@ -22,9 +22,8 @@ load test_helper
 }
 
 @test "config.sh exports all expected variables" {
-    # Source config.sh in a subshell with a fake project root
+    # Source config.sh in a subshell
     run bash -c "
-        _LLAMA_PROJECT_ROOT='${TEST_TMPDIR}'
         source '${BATS_TEST_DIRNAME}/../config.sh' 2>/dev/null
         [[ -n \"\${LLAMA_CPP_SRC}\" ]]
         [[ -n \"\${REPO}\" ]]
@@ -37,7 +36,6 @@ load test_helper
 @test "config.sh honors environment variable overrides" {
     # config.sh uses \${VAR:-default} pattern — env vars should take precedence
     run bash -c "
-        _LLAMA_PROJECT_ROOT='${TEST_TMPDIR}'
         LLAMA_CPP_SRC='/custom/src/path'
         CMAKE_BUILD_TYPE='Debug'
         CMAKE_CUDA_ARCHITECTURES='86'
