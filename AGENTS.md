@@ -174,6 +174,6 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 - **无 CI/CD**：所有质量检查（lint/syntax/test）仅支持本地手动运行
 - **临时补丁**：`build.sh` 的 CUDA RPATH 检测（`_detect_cuda_lib_dir` 周围，注释标记 `TODO(upstream)`）是 llama.cpp b8940+ 的临时补丁（CUDA 私有依赖 RPATH 问题），上游修复后应移除
 - **`llama_check_disk_space` 不阻塞**：路径不存在时仅警告，不阻止继续
-- **测试隔离机制**：`tests/test_helper.bash` 的 `_setup_tmpdir()` 为每个测试创建独立的临时 git 仓库并 export `LLAMA_CPP_SRC` 指向它（覆盖 `config.sh` 的默认生产路径），确保测试绝不触碰生产 `../llama.cpp`。`_teardown_tmpdir` 在 `teardown` 时自动清理。新增测试应使用已导出的 `LLAMA_CPP_SRC` 或在 `TEST_TMPDIR` 下自建 fake repo
+- **测试隔离机制**：`tests/test_helper.bash` 的 `_setup_tmpdir()` 为每个测试创建独立的临时 git 仓库并 export `LLAMA_CPP_SRC` 指向它（覆盖 `config.sh` 的默认生产路径），确保测试绝不触碰生产路径 `/mnt/usr/tools/llama.cpp`。`_teardown_tmpdir` 在 `teardown` 时自动清理。新增测试应使用已导出的 `LLAMA_CPP_SRC` 或在 `TEST_TMPDIR` 下自建 fake repo
 - **Bash 源文件扩展名**：测试辅助使用 `.bash`（`test_helper.bash`），不是 `.bats`——它是被 load 的库文件，不是测试文件
 - **脚本注释布局**：文件头 `# ===...===` 块；节分隔 `# --- 节名 ---`；函数注释 `# Usage: <name> <args>`

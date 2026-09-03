@@ -37,7 +37,7 @@
 | CMake ≥ 3.20 | CMake 最低版本（llama.cpp 要求） |
 | Ninja | 构建工具（或 `ninja-build`） |
 | GCC / G++ ≥ 12.0 | C/C++ 编译器（GCC 12.x 已验证兼容 CUDA 13.0） |
-| CUDA Toolkit | 需 `nvcc` 可用（不强制特定版本） |
+| CUDA Toolkit | 需 `nvcc` 可用。本机刻意钉住 **CUDA 13.0**（经 conda 环境 `llama.cpp` 提供；驱动 580.119.02 认证上限即 13.0，**升级 CUDA 前须先升驱动**） |
 | OpenBLAS | `libopenblas-dev` 开发包 |
 | Python 3 | JSON 解析（update.sh）及 OpenBLAS 运行时验证（build.sh） |
 | `gh` | GitHub CLI（update.sh 优先使用，未安装时回退到 `curl`） |
@@ -72,20 +72,21 @@
 git clone https://github.com/YOUR_USERNAME/llama.cpp_helper  # 请替换 YOUR_USERNAME
 cd llama.cpp_helper
 
-# 1. 一键更新——首次使用会自动克隆 llama.cpp 源码（到 ../llama.cpp）并构建最新 release
+# 1. 一键更新——首次使用会自动克隆 llama.cpp 源码（默认到 /mnt/usr/tools/llama.cpp，
+#    可经 LLAMA_CPP_SRC 覆盖）并构建最新 release
 bash update.sh
 
 # 2. 加载运行时环境
 source run_env.sh
 
 # 3. 运行模型推理
-../llama.cpp/build/bin/llama-cli \
+/mnt/usr/tools/llama.cpp/build/bin/llama-cli \
     -m /path/to/model.gguf \
     -ngl 99 \
     -p "你好"
 
 # 4. 运行模型服务
-../llama.cpp/build/bin/llama-server \
+/mnt/usr/tools/llama.cpp/build/bin/llama-server \
     -m /path/to/model.gguf \
     -ngl 99 \
     --port 8080
