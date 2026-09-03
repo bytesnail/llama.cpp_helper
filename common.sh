@@ -876,10 +876,16 @@ _llama_validate_out_var() {
 }
 
 # Usage: llama_safe_exit [exit_code]
+# 统一退出漏斗：解除信号 trap、释放文件锁、并清理 llama_run_silent 遗留的
+# 捕获临时文件（信号路径经此处退出时，llama_run_silent 自身的 rm -f 不可达）。
 llama_safe_exit() {
     local code="${1:-0}"
     llama_cleanup_trap
     llama_release_lock
+    if [[ -n "${_LLAMA_RUN_SILENT_TMP:-}" ]]; then
+        rm -f -- "${_LLAMA_RUN_SILENT_TMP}"
+        unset _LLAMA_RUN_SILENT_TMP
+    fi
     exit "$code"
 }
 
@@ -983,6 +989,10 @@ llama_run_silent() {
 
     local _lrs_tmp_out
     _lrs_tmp_out=$(mktemp "${TMPDIR:-/tmp}/llama_run_silent.XXXXXX" 2>/dev/null) || _lrs_tmp_out=""
+    # 登记到脚本级变量供 llama_safe_exit 清理：信号路径（trap → llama_safe_exit
+    # → exit）不会执行下方 rm -f，临时文件（可能是整份构建日志）会遗留 $TMPDIR。
+    # 本项目内无嵌套调用；若将来嵌套，内层先完成会提前 unset（仅影响信号路径清理）。
+    _LLAMA_RUN_SILENT_TMP="$_lrs_tmp_out"
     # 与 llama_activate_conda 同理：不能用 prev_opts=$(set +o) 保存/恢复
     # errexit——bash 默认在命令替换子 shell 中重置 errexit（inherit_errexit
     # 默认 off），eval 恢复后会把调用者的 set -e 永久静默关闭（已实证）。
@@ -1012,6 +1022,7 @@ llama_run_silent() {
             _lrs_ret=$?
         fi
     fi
+    unset _LLAMA_RUN_SILENT_TMP
     # 对称恢复（与 llama_activate_conda 同款）：原本开启的重新开启，原本关闭
     # 的强制关闭——被包装的 shell 函数内部 set -e 后成功返回会把 errexit 泄漏
     # 给调用者，其剩余代码会在不知情的严格模式下运行
