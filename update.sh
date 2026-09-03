@@ -793,8 +793,12 @@ _update_source() {
 
     # 错误诊断由 llama_with_network_context 输出（含退出码与排查指引），
     # 不再叠加一条措辞近似的 die 消息
+    # --force：git 默认不更新本地已存在的同名标签——上游重指 release 标签
+    # （或本地残留同名旧标签）时，下方 refs/tags 解析会拿到过期 SHA 并
+    # checkout 到错误 commit，而一致性校验比较的是同一过期 SHA，无法察觉
+    # （实测：fetch --tags 后本地标签仍指旧 commit，--force 后才跟随上游）
     llama_with_network_context "从远程仓库拉取标签" \
-        _git_net fetch origin --quiet --tags || llama_die
+        _git_net fetch origin --force --quiet --tags || llama_die
 
     # 本地解析优先：fetch --tags 已拉取全部标签，绝大多数情况下无需
     # 再做 git ls-remote 网络往返；仅本地缺失时才精确拉取该标签。
