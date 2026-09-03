@@ -228,3 +228,30 @@ load test_helper
     [ -n "$pin_line" ]
     [ "$activate_line" -lt "$pin_line" ]
 }
+
+@test "entry scripts tolerate double source without readonly errors" {
+    # 回归：build.sh/update.sh 的 readonly SCRIPT_DIR 曾无 _LLAMA_*_SOURCED
+    # 守卫——同一 shell 二次 source（如测试进程内重复 _load_build）时报
+    # "只读变量"错误。守卫后二次 source 应静默 no-op。
+    # 注意：两个入口不放在同一 shell 混合 source——SCRIPT_DIR/BUILD_SCRIPT
+    # 是跨脚本同名 readonly，先后 source build.sh 与 update.sh 的组合冲突
+    # 是另一维度的既有行为（测试提取模式从不混用两个入口），不在本测试范围
+    run bash -c "
+        _LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../build.sh'
+        _LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../build.sh'
+        echo BUILD_DOUBLE_OK
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"BUILD_DOUBLE_OK"* ]]
+    [[ "$output" != *"只读变量"* ]]
+    [[ "$output" != *"readonly variable"* ]]
+    run bash -c "
+        _LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'
+        _LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../update.sh'
+        echo UPDATE_DOUBLE_OK
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UPDATE_DOUBLE_OK"* ]]
+    [[ "$output" != *"只读变量"* ]]
+    [[ "$output" != *"readonly variable"* ]]
+}

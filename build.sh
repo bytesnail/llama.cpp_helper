@@ -14,6 +14,15 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     set -euo pipefail
 fi
 
+# 防止重复 source：与 common.sh/config.sh/run_env.sh 的 _LLAMA_*_SOURCED
+# 守卫同款——同一 shell 二次 source 时 readonly SCRIPT_DIR 重复赋值会报
+# "只读变量"错误（直接执行的进程每次全新，无此问题）
+_LLAMA_BUILD_SOURCED=${_LLAMA_BUILD_SOURCED:-0}
+if [[ "$_LLAMA_BUILD_SOURCED" -eq 1 ]]; then
+    return 0 2>/dev/null || true
+fi
+_LLAMA_BUILD_SOURCED=1
+
 # 注意：此处内联初始化 SCRIPT_DIR，因为 source common.sh 需要它。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 readonly SCRIPT_DIR
@@ -237,8 +246,10 @@ _verify_build() {
         errors=$((errors + 1))
     fi
 
-    # 运行时验证（非致命）
-    _verify_openblas_runtime "$bin_dir" "$verify_binary" "$ldd_cache" || true
+    # 运行时验证（非致命）：函数三分支均以 llama_ok/llama_warn 结束、
+    # 恒返回 0——不加防御性 || true（一旦未来函数产生失败路径，它会静默
+    # 吞掉返回码，读者也会误以为此处存在可失败分支）
+    _verify_openblas_runtime "$bin_dir" "$verify_binary" "$ldd_cache"
     return "$errors"
 }
 

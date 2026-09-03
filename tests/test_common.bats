@@ -1040,6 +1040,50 @@ CONDAEOF
     [ "$output" -ge 1 ]
 }
 
+@test "llama_hw_cpu_* use prefetched lscpu output without forking lscpu" {
+    # 预取透传契约：传入 [lscpu_output] 时不得再调 lscpu（违规调用写标记文件）
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    local marker="${TEST_TMPDIR}/lscpu_forked.marker"
+    printf '#!/bin/bash\ntouch "%s"\n' "$marker" > "${mock_dir}/lscpu"
+    chmod +x "${mock_dir}/lscpu"
+
+    local _saved_path="$PATH"
+    PATH="${mock_dir}:$PATH"
+    run llama_hw_cpu_sockets "Socket(s):              4"
+    local sockets_out="$output" sockets_rc="$status"
+    run llama_hw_cpu_cores_physical "Socket(s):              2
+Core(s) per socket:     8"
+    local cores_out="$output" cores_rc="$status"
+    PATH="$_saved_path"
+
+    [ "$sockets_rc" -eq 0 ]
+    [ "$sockets_out" = "4" ]
+    [ "$cores_rc" -eq 0 ]
+    [ "$cores_out" = "16" ]
+    [[ ! -f "$marker" ]]
+}
+
+@test "llama_print_hardware_summary runs lscpu exactly once" {
+    # 回归：原逐字段调用使一次汇总 fork 4 次 lscpu（每次都重读 sysfs）——
+    # 预取透传后同一份输出应只产生 1 次 lscpu 调用
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    local counter="${TEST_TMPDIR}/lscpu.count"
+    printf '#!/bin/bash\nc=$(cat "%s" 2>/dev/null || echo 0)\necho $((c + 1)) > "%s"\nprintf "Model name:             Test CPU 9999\\nSocket(s):              2\\nCore(s) per socket:     8\\nCPU(s):                 32\\n"\n' \
+        "$counter" "$counter" > "${mock_dir}/lscpu"
+    chmod +x "${mock_dir}/lscpu"
+
+    local _saved_path="$PATH"
+    PATH="${mock_dir}:$PATH"
+    run llama_print_hardware_summary
+    PATH="$_saved_path"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Test CPU 9999"* ]]
+    [ "$(cat "$counter")" = "1" ]
+}
+
 @test "llama_hw_cpu_cores_physical returns positive integer" {
     run llama_hw_cpu_cores_physical
     [ "$status" -eq 0 ]

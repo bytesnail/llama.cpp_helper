@@ -10,6 +10,15 @@ if [[ "${_LLAMA_SOURCE_ONLY:-}" != "1" ]]; then
     set -euo pipefail
 fi
 
+# 防止重复 source：与 common.sh/config.sh/run_env.sh 的 _LLAMA_*_SOURCED
+# 守卫同款——同一 shell 二次 source 时 readonly SCRIPT_DIR 重复赋值会报
+# "只读变量"错误（直接执行的进程每次全新，无此问题）
+_LLAMA_UPDATE_SOURCED=${_LLAMA_UPDATE_SOURCED:-0}
+if [[ "$_LLAMA_UPDATE_SOURCED" -eq 1 ]]; then
+    return 0 2>/dev/null || true
+fi
+_LLAMA_UPDATE_SOURCED=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 readonly SCRIPT_DIR
 # 注意：此处内联初始化 SCRIPT_DIR，因为 source common.sh 需要它。
@@ -296,35 +305,43 @@ d = json.load(sys.stdin)
 print("\t".join(str(d[k]) for k in sys.argv[1:]))' "$@"
 }
 
-# Usage: _pick_latest_release_tag
-# gh 列表路径的选择器：stdin 为 gh release list --json 的数组，滤除 draft
-# 后按 publishedAt 取最新（同格式 ISO8601 字典序=时间序，不依赖服务端
-# 排序），stdout 输出该 release 的 tagName。无可选 release（全 draft）时
+# Usage: _pick_latest_release <draft_key> <date_key> <field_key>...
+# 通用选择器：stdin 为 release 对象数组 JSON，滤除 draft 后按发布时间取
+# 最新（同格式 ISO8601 字典序=时间序，不依赖服务端排序），输出该对象中
+# <field_key>... 各字段值（TAB 分隔）。无可选 release（全 draft/空数组）时
 # 返回 1，由 adapter 转为失败回退。
-# 字段名 tagName/isDraft/publishedAt 是 gh --json 的 camelCase 契约常量。
-_pick_latest_release_tag() {
+# gh 路径（camelCase 字段）与 REST 路径（snake_case 字段）共用同一选择
+# 核心，字段名差异经参数映射——滤 draft/取最新的逻辑单点维护，防止两条
+# 路径的行为漂移。值为 dict 时取其 "sha" 成员：仅 REST 的 target_commitish
+# 存在此形态（实测为字符串 SHA，2026-09 实证；保留兼容以防 API 回归），
+# 对字符串字段该归一化是无操作。
+_pick_latest_release() {
     python3 -c 'import json,sys
-rs = [r for r in json.load(sys.stdin) if not r.get("isDraft")]
+draft_key, date_key = sys.argv[1], sys.argv[2]
+fields = sys.argv[3:]
+rs = [r for r in json.load(sys.stdin) if not r.get(draft_key)]
 if not rs:
     sys.exit(1)
-print(max(rs, key=lambda r: r.get("publishedAt") or "").get("tagName", ""))'
+r = max(rs, key=lambda x: x.get(date_key) or "")
+def val(f):
+    v = r.get(f) or ""
+    return v.get("sha", "") if isinstance(v, dict) else str(v)
+print("\t".join(val(f) for f in fields))' "$@"
+}
+
+# Usage: _pick_latest_release_tag
+# gh 列表路径的选择器（_pick_latest_release 的 camelCase 映射）：输出
+# 选中 release 的 tagName。
+# 字段名 tagName/isDraft/publishedAt 是 gh --json 的契约常量。
+_pick_latest_release_tag() {
+    _pick_latest_release isDraft publishedAt tagName
 }
 
 # Usage: _pick_latest_release_rest
-# REST 列表路径的选择器+格式器：stdin 为 GET /releases 的数组，滤除
-# draft 后按 published_at 取最新，输出与 _parse_release_json 相同形态的
-# TAB 行（tag/commit/date/url）。target_commitish 实测为字符串 SHA
-# （2026-09 实证），保留 dict→sha 兼容以防 API 形态回归。
-# 无可选 release（全 draft）时返回 1。
+# REST 列表路径的选择器+格式器（_pick_latest_release 的 snake_case 映射）：
+# 输出与 _parse_release_json 相同形态的 TAB 行（tag/commit/date/url）。
 _pick_latest_release_rest() {
-    python3 -c 'import json,sys
-rs = [r for r in json.load(sys.stdin) if not r.get("draft")]
-if not rs:
-    sys.exit(1)
-r = max(rs, key=lambda x: x.get("published_at") or "")
-tc = r.get("target_commitish") or ""
-tc = tc.get("sha", "") if isinstance(tc, dict) else tc
-print("\t".join([r.get("tag_name", ""), tc, r.get("published_at") or "", r.get("html_url") or ""]))'
+    _pick_latest_release draft published_at tag_name target_commitish published_at html_url
 }
 
 # Usage: _print_success_summary <source_updated> <current_ver> <target_ver> <release_date>

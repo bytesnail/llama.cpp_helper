@@ -196,26 +196,33 @@ _llama_join() {
     printf '%s' "$out"
 }
 
-# Usage: _llama_lscpu_field <field_regex>
+# Usage: _llama_lscpu_field <field_regex> [lscpu_output]
 # 解析 lscpu 输出中首个匹配字段（$1 为作用于首列的正则）的值，去前导空格。
 # lscpu 不可用时输出空串。
-# 无跨调用缓存：全部消费方都经 $(...) 命令替换调用本函数，缓存赋值发生在
-# 子 shell 中随之销毁（曾经的 _LLAMA_LSCPU_CACHE 是恒未命中的死代码）；
+# [lscpu_output] 缺省时现场调用 lscpu；批量消费方（llama_print_hardware_summary
+# 经 llama_hw_cpu_* 透传）显式传入同一份输出，免去每字段一次 lscpu fork
+# （原一次汇总 4 次 lscpu，各读一遍 sysfs）。空串视为未提供——调用方
+# 无预取输出时回退现场调用（lscpu 缺失时的重复 ENOENT fork 开销可忽略）。
+# 不设跨调用缓存：消费方经 $(...) 命令替换调用，缓存赋值发生在子 shell 中
+# 随之销毁（曾经的 _LLAMA_LSCPU_CACHE 是恒未命中的死代码）。
 # LC_ALL=C 固定英文输出，防止本地化字段名（如中文 "型号:"）导致匹配失败。
 _llama_lscpu_field() {
     # || true：lscpu 不可用时（缺失/损坏）赋值在 pipefail 下返回非零，
     # 会中止 build.sh（经 llama_hw_cpu_* → llama_print_hardware_summary 调用链）。
     # 加 || true 后输出为空串，调用者得到空串，从而触发 /proc/cpuinfo 回退或 0 回退。
+    local out="${2:-$(LC_ALL=C lscpu 2>/dev/null || true)}"
     awk -F: -v re="$1" '
         $1 ~ re { sub(/^[[:space:]]+/, "", $2); print $2; exit }
-    ' <<< "$(LC_ALL=C lscpu 2>/dev/null || true)"
+    ' <<< "$out"
 }
 
-# Usage: llama_hw_cpu_model
+# Usage: llama_hw_cpu_model [lscpu_output]
 # 输出 CPU 型号字符串；无法获取时输出空串。
+# 可选 [lscpu_output]：调用方预取的 lscpu 输出（透传给 _llama_lscpu_field
+# 免重复 fork），缺省时现场调用——无参调用行为与历史版本完全一致。
 llama_hw_cpu_model() {
     local model
-    model=$(_llama_lscpu_field "Model name")
+    model=$(_llama_lscpu_field "Model name" "${1:-}")
     if [[ -z "$model" ]]; then
         # || true：/proc/cpuinfo 不可读时（容器/沙箱环境）awk 返回非零，
         # pipefail+set -e 下会中止；加 || true 后 model 为空串，符合契约。
@@ -224,11 +231,12 @@ llama_hw_cpu_model() {
     printf '%s' "$model"
 }
 
-# Usage: llama_hw_cpu_sockets
+# Usage: llama_hw_cpu_sockets [lscpu_output]
 # 输出物理 CPU（socket）数量；无法获取时输出 0。
+# [lscpu_output] 语义同 llama_hw_cpu_model。
 llama_hw_cpu_sockets() {
     local n
-    n=$(_llama_lscpu_field "^Socket")
+    n=$(_llama_lscpu_field "^Socket" "${1:-}")
     # if/else 而非 A && B || C：printf 失败（写端关闭）会被 || 分支误判，
     # 输出 0 而非真实值（与 build.sh 前置检查的同款约定一致）
     if [[ "$n" =~ ^[0-9]+$ ]]; then
@@ -238,12 +246,13 @@ llama_hw_cpu_sockets() {
     fi
 }
 
-# Usage: llama_hw_cpu_cores_physical
+# Usage: llama_hw_cpu_cores_physical [lscpu_output]
 # 输出物理核总数（sockets × 每路核数）；无法获取时输出 0。
+# [lscpu_output] 语义同 llama_hw_cpu_model（同时供内部的 sockets 查询复用）。
 llama_hw_cpu_cores_physical() {
     local sockets per_socket
-    sockets=$(llama_hw_cpu_sockets)
-    per_socket=$(_llama_lscpu_field "^Core")
+    sockets=$(llama_hw_cpu_sockets "${1:-}")
+    per_socket=$(_llama_lscpu_field "^Core" "${1:-}")
     if [[ "$sockets" =~ ^[0-9]+$ && "$per_socket" =~ ^[0-9]+$ ]]; then
         printf '%s' $((sockets * per_socket))
     else
@@ -327,10 +336,15 @@ llama_print_hardware_summary() {
     llama_step "硬件信息"
 
     # --- CPU ---
+    # 单次 lscpu 供全部字段消费（原逐字段调用，一次汇总 4 次 lscpu——
+    # 每次 fork 都重读 sysfs）；空输出（lscpu 不可用）时 hw 函数回退
+    # 现场调用再走 /proc/cpuinfo 回退，行为与逐次调用一致
+    local lscpu_out
+    lscpu_out=$(LC_ALL=C lscpu 2>/dev/null || true)
     local cpu_model sockets cores_phy cores_log flags
-    cpu_model=$(llama_hw_cpu_model)
-    sockets=$(llama_hw_cpu_sockets)
-    cores_phy=$(llama_hw_cpu_cores_physical)
+    cpu_model=$(llama_hw_cpu_model "$lscpu_out")
+    sockets=$(llama_hw_cpu_sockets "$lscpu_out")
+    cores_phy=$(llama_hw_cpu_cores_physical "$lscpu_out")
     cores_log=$(llama_get_cpu_count)
     flags=$(llama_hw_cpu_flags)
 
