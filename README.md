@@ -309,16 +309,28 @@ CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 
 > 若变量已被用户预先设置（`export`），`run_env.sh` 会保留用户值而非覆盖。
 
-> `GGML_CUDA_ENABLE_UNIFIED_MEMORY` 未被启用——统一内存对离散 GPU 性能有害。仅在集成 GPU 或 VRAM 不足时手动启用。
-
 #### 可选 CUDA 运行时变量
 
-以下变量由 `run_env.sh` 执行时输出建议。完整列表请参考 [ggml CUDA 后端文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/CUDA.md)。
+以下为应急/特殊场景开关，`run_env.sh` 不自动设置。完整列表请参考 [ggml CUDA 后端文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/CUDA.md)。
 
 | 变量 | 说明 |
 |------|------|
-| `GGML_CUDA_GRAPH_OPT=1` | 启用 CUDA 图优化（单 GPU 场景受益） |
-| `GGML_CUDA_NO_PINNED=1` | 禁用固定内存（低显存场景） |
+| `GGML_CUDA_ENABLE_UNIFIED_MEMORY` | 统一内存应急：模型+KV 超出双卡 44GB 显存 OOM 时临时开启。对离散 GPU 性能有害（x86 无缓存一致性，页迁移慢速），勿常态启用 |
+| `GGML_CUDA_NO_PINNED=1` | 规避主机锁页内存受限 / `cudaMallocHost` 分配失败；代价是 CPU↔GPU 传输带宽下降 |
+| `GGML_CUDA_GRAPH_OPT=1` | CUDA 图调度优化——**本机构建无效**：`GGML_CUDA_GRAPHS=OFF` 未编译 CUDA graphs，且该优化仅单卡生效 |
+
+### 多 GPU 说明（2× RTX 2080 Ti NVLink）
+
+| 项目 | 说明 |
+|------|------|
+| 默认模式 | `layer` 流水线并行（上游默认）：每卡持有一段连续层，跨卡通信最少，prefill 快、批量吞吐高 |
+| `tensor` 模式（实验性） | `--split-mode tensor`：权重与 KV 均按卡切分、每层多次跨卡归约，token 生成延迟最低。约束：必须 `-fa`；KV cache 必须非量化（f32/f16/bf16）；MoE/混合与 Mamba 系架构不支持 |
+| NCCL | 已启用（conda 包 `nccl` 2.30.7，经 RPATH 免激活解析）。仅 `tensor` 模式的跨卡归约使用；`layer` 流水线不经 NCCL |
+| P2P 直传 | 运行前 `source run_env.sh` 设置 `GGML_CUDA_P2P=1`（存在性语义，关闭须 `unset`） |
+
+### 运行无需激活 conda
+
+构建产物经 RPATH 内嵌 conda 环境 CUDA 库的绝对路径（`libcudart`/`libcublas`/`libcublasLt`/`libnccl`），已在完全干净环境（`env -i`）下实证可正常运行与枚举 GPU。约束：conda 环境目录 `envs/llama.cpp/` **不可删除**，否则二进制失效（重装环境或重建可恢复）。`run_env.sh` 的核心目的是设置 `GGML_CUDA_P2P`，激活 conda 仅为顺带。
 
 ---
 

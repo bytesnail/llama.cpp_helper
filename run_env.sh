@@ -198,8 +198,11 @@ main() {
 
 ${YELLOW}⚠️  注意:${NC}
   • 针对 2× RTX 2080 Ti (NVLink) 离散 GPU 优化
-  • GGML_CUDA_ENABLE_UNIFIED_MEMORY 未启用 — 统一内存对离散 GPU 有害，仅 OOM 时手动开启
-  • 可选优化：GGML_CUDA_GRAPH_OPT=1（CUDA 图优化）、GGML_CUDA_NO_PINNED=1（低显存禁用固定内存）
+  • 运行无需激活 conda（RPATH 内嵌 CUDA 库绝对路径）；本脚本核心目的是设置 GGML_CUDA_P2P
+  • GGML_CUDA_ENABLE_UNIFIED_MEMORY 未启用 — 对离散 GPU 有害（x86 无缓存一致性，页迁移慢速），
+    仅当模型+KV 超出双卡 44GB 显存 OOM 时临时开启应急
+  • 应急开关 GGML_CUDA_NO_PINNED=1：主机锁页内存受限/cudaMallocHost 分配失败时规避
+    （代价：CPU↔GPU 传输带宽下降），常规无需设置
 EOF
 
     llama_ok "llama.cpp 运行环境已加载"
