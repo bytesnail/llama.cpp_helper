@@ -100,22 +100,27 @@ load test_helper
     [[ "$output" == *"SOURCED_TWICE"* ]]
 }
 
-@test "source run_env.sh does not leak _main_rc or finalize helper" {
-    # 回归测试：脚本级 _main_rc 曾残留父 shell（实测 _main_rc=0 泄漏）——
+@test "source run_env.sh does not leak _llama_run_env_rc or finalize helper" {
+    # 回归测试：脚本级 rc 变量曾残留父 shell（实测泄漏）——
     # 收尾函数经参数接收后 unset；finalize 函数自身也随调用自卸载。
-    # LLAMA_HELPER_VERSION 同理：--version 分支内经 main 的 local 提取，
-    # 不再残留（此前在 source 时急切赋值进父 shell 且永不清理）
+    # LLAMA_HELPER_VERSION 同理：--version 分支内经 local 提取，不再残留。
+    # 函数名 _llama_run_env_* 前缀：防止覆写父 shell 的同名函数（如 main()）
+    # 后又在清理时把原件销毁（已实证）
     run bash -c "
+        main() { echo 'PARENT MAIN'; }
+        _main_rc=42
         source '${BATS_TEST_DIRNAME}/../run_env.sh' --version >/dev/null 2>&1
-        declare -p _main_rc >/dev/null 2>&1 && echo LEAK_RC
+        declare -p _llama_run_env_rc >/dev/null 2>&1 && echo LEAK_RC
         declare -f _llama_run_env_finalize >/dev/null 2>&1 && echo LEAK_FN
-        declare -f main >/dev/null 2>&1 && echo LEAK_MAIN
+        declare -f _llama_run_env_main >/dev/null 2>&1 && echo LEAK_MAIN
+        declare -f main >/dev/null 2>&1 || echo PARENT_MAIN_GONE
         declare -p LLAMA_HELPER_VERSION >/dev/null 2>&1 && echo LEAK_VER
         echo DONE
     "
     [ "$status" -eq 0 ]
     [[ "$output" == *"DONE"* ]]
     [[ "$output" != *"LEAK"* ]]
+    [[ "$output" != *"PARENT_MAIN_GONE"* ]]
 }
 
 @test "source run_env.sh cleans up color variables (no parent shell pollution)" {
