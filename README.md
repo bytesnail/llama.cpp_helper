@@ -2,7 +2,7 @@
 
 针对 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的自动化构建与管理工具集，面向双路 NVIDIA RTX 2080 Ti (NVLink) 工作站优化。
 
-**版本：** 1.0.0
+**版本：** 1.1.0
 
 > 开发者内部参考（架构、命名约定、反模式、安全特性）：参见 [AGENTS.md](AGENTS.md)
 
@@ -291,17 +291,21 @@ CONDA_ENV_NAME=llama-cpp source run_env.sh
 
 ### 网络超时配置
 
-以下变量控制 `update.sh` 访问 GitHub API 的超时行为。可通过环境变量覆盖。
+以下变量控制 `update.sh` 访问 GitHub API 与 git 网络调用的超时行为。可通过环境变量覆盖。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `CURL_CONNECT_TIMEOUT` | `10` | curl 连接超时（秒） |
 | `CURL_MAX_TIME` | `30` | curl 请求最大用时（秒） |
+| `GIT_HTTP_LOW_SPEED_LIMIT` | `1000` | git 低速保护阈值（字节/秒）：传输速率低于该值并持续 `GIT_HTTP_LOW_SPEED_TIME` 秒即中止（作用于 `update.sh` 的 clone/fetch/submodule） |
+| `GIT_HTTP_LOW_SPEED_TIME` | `15` | git 低速保护持续时间（秒） |
 
 ```bash
 # 在慢速网络上增加超时时间
 CURL_CONNECT_TIMEOUT=30 CURL_MAX_TIME=60 bash update.sh
 ```
+
+> 另有 host 工具链查找目录 `LLAMA_HOST_TOOLCHAIN_BIN`（默认 `/usr/bin`，见 `config.sh`）：conda 激活后其 env bin 中的交叉 binutils 裸名 `ld`/`as` 会劫持系统 gcc 的链接，`build.sh` 经 `COMPILER_PATH` 把 gcc 子程序查找钉到该目录。
 
 ### 运行时环境变量
 
