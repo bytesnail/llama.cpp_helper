@@ -229,7 +229,13 @@ llama_hw_cpu_model() {
 llama_hw_cpu_sockets() {
     local n
     n=$(_llama_lscpu_field "^Socket")
-    [[ "$n" =~ ^[0-9]+$ ]] && printf '%s' "$n" || printf 0
+    # if/else 而非 A && B || C：printf 失败（写端关闭）会被 || 分支误判，
+    # 输出 0 而非真实值（与 build.sh 前置检查的同款约定一致）
+    if [[ "$n" =~ ^[0-9]+$ ]]; then
+        printf '%s' "$n"
+    else
+        printf 0
+    fi
 }
 
 # Usage: llama_hw_cpu_cores_physical
@@ -293,7 +299,12 @@ llama_hw_cpu_flags() {
 llama_hw_mem_total_bytes() {
     local kb
     kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)
-    [[ "$kb" =~ ^[0-9]+$ ]] && printf '%s' $((kb * 1024)) || printf 0
+    # if/else 而非 A && B || C：同 llama_hw_cpu_sockets
+    if [[ "$kb" =~ ^[0-9]+$ ]]; then
+        printf '%s' $((kb * 1024))
+    else
+        printf 0
+    fi
 }
 
 # Usage: llama_hw_mem_total_human
