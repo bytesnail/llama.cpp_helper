@@ -247,6 +247,47 @@ MOCK_GIT_EOF
     [[ "$output" =~ "源码已更新到 b4000" ]]
 }
 
+@test "_check_local_repo leaves interrupt trap unarmed (read-only phase)" {
+    # 中断恢复 trap 曾在 _check_local_repo（只读检查）注册：GitHub API 查询
+    # 等待期间的 Ctrl-C 会触发对未修改树的完整回滚（checkout 同一 commit +
+    # 网络 submodule update），中断被无谓拖慢——trap 移至 _update_source
+    # （首个修改源码库的步骤）后，只读阶段应保持无 trap
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    LLAMA_CPP_SRC="$fake_repo"
+
+    _check_local_repo > /dev/null 2>&1
+    # bats 框架自身会注册信号 trap，断言只能针对"未武装 _cleanup_on_interrupt"
+    # （独立 shell 中已验证 _check_local_repo 后 SIGINT 无任何 trap）
+    local handler
+    handler=$(trap -p SIGINT 2>&1 || true)
+    [[ "$handler" != *"_cleanup_on_interrupt"* ]]
+}
+
+@test "_update_source arms interrupt trap before mutating the repo" {
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/src_repo"
+    local origin_repo="${TEST_TMPDIR}/origin.git"
+    mkdir -p "$fake_repo"
+    _init_git_repo "$fake_repo"
+    git -C "$fake_repo" tag b4000
+    git clone -q --bare "$fake_repo" "$origin_repo"
+    git -C "$fake_repo" remote add origin "$origin_repo"
+    LLAMA_CPP_SRC="$fake_repo"
+
+    _session_capture_current
+    _session_set_target "b4000" ""
+
+    _update_source > /dev/null 2>&1
+    # 修改源码库的窗口内 trap 必须武装（fetch/checkout 期间中断 → 回滚）
+    local handler
+    handler=$(trap -p SIGINT 2>&1 || true)
+    [[ "$handler" =~ "_cleanup_on_interrupt" ]]
+    llama_cleanup_trap
+}
+
 @test "_update_source with full-SHA target at tagged commit does not warn tag mismatch" {
     # 回归：release_tag 为 commit SHA 时与 actual_tag（commit 上的真实标签）
     # 比较必然不等，曾对完全正确的 checkout 误报「标签不一致」

@@ -403,8 +403,12 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     # --- 步骤 3：编译 --------------------------------------------
     llama_step "步骤 3/4：编译（${jobs} 核并行）"
 
-    local build_exit
-    llama_run_silent build_exit cmake --build "$BUILD_DIR" -j "$jobs"
+    # 直跑（不经 llama_run_silent）：完整编译要 30-60 分钟，ninja 进度须
+    # 流式可见——静默包装期间控制台零输出，无法区分卡死与编译中。
+    # 步骤 2 的 CMake 配置保留 llama_run_silent：秒级命令，失败时转储完整
+    # 输出、成功时保持安静。|| 捕获退出码（set -e 下失败不中止，由下方 die 报告）
+    local build_exit=0
+    cmake --build "$BUILD_DIR" -j "$jobs" || build_exit=$?
 
     if [[ "$build_exit" -ne 0 ]]; then
         llama_die "编译失败 (退出码: $build_exit)"

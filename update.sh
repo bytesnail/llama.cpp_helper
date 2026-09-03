@@ -561,7 +561,7 @@ _ensure_source_repo() {
     llama_check_disk_space "$parent_dir" || llama_die
 
     # clone 期间的中断清理 trap：注册窗口即"目录内无用户数据"的安全标记，
-    # clone 成功后立即解除（后续由 _check_local_repo 注册 _cleanup_on_interrupt 接管）
+    # clone 成功后立即解除（后续由 _update_source 注册 _cleanup_on_interrupt 接管）
     trap '_cleanup_on_clone_interrupt 130' SIGINT
     trap '_cleanup_on_clone_interrupt 143' SIGTERM
 
@@ -684,11 +684,6 @@ _check_local_repo() {
 
     _session_capture_current
 
-    # 设置中断恢复 trap（函数在顶层定义）；分信号显式传入退出码，
-    # 与 build.sh 的 trap 形态一致（llama_setup_trap 的同一处理串无法区分信号）
-    trap '_cleanup_on_interrupt 130' SIGINT
-    trap '_cleanup_on_interrupt 143' SIGTERM
-
     local actual_remote
     actual_remote=$(git -C "$LLAMA_CPP_SRC" remote get-url origin 2>/dev/null || echo "")
     local normalized_remote="${actual_remote%.git}"
@@ -807,6 +802,18 @@ _resolve_target() {
 # Usage: _update_source
 _update_source() {
     llama_check_disk_space "$LLAMA_CPP_SRC" || llama_die
+
+    # 中断恢复 trap 在此注册（而非 _check_local_repo）：本函数是首个修改
+    # 源码库的步骤（fetch 移动 refs/tags）。此前提前武装使只读阶段——
+    # GitHub API 查询（CURL_MAX_TIME 默认 30s 等待）——的 Ctrl-C 也触发对
+    # 未修改树的完整回滚（checkout 同一 commit + 网络 submodule update），
+    # 中断被无谓拖慢数秒到数分钟。只读窗口（_check_local_repo/
+    # _resolve_target）无 trap：中断即干净退出，无需恢复。
+    # 分信号显式传入退出码，与 build.sh 的 trap 形态一致（llama_setup_trap
+    # 的同一处理串无法区分信号）
+    trap '_cleanup_on_interrupt 130' SIGINT
+    trap '_cleanup_on_interrupt 143' SIGTERM
+
     llama_info "正在从远程仓库拉取最新引用..."
 
     # 错误诊断由 llama_with_network_context 输出（含退出码与排查指引），
@@ -933,18 +940,27 @@ _build_with_rollback() {
     # 在启动 build.sh 前释放锁 — build.sh 会获取自己的锁，
     # 同时持有两个锁会导致死锁（同一锁文件、同一 UID）。
     llama_release_lock
-    # llama_run_silent 恒返回 0，退出码写入 build_status（先 local 声明，
-    # 动态作用域下的 printf -v 才会写入此局部变量）
-    local build_status
-    llama_run_silent build_status bash "$BUILD_SCRIPT"
+    # 直跑（不经 llama_run_silent）：build.sh 的日志与编译进度流式可见——
+    # 静默包装会使 30-60 分钟的真实构建期间控制台零输出（无法区分卡死与
+    # 编译中）；|| 捕获退出码供分支决策，失败输出已在终端可见，无需转储
+    local build_status=0
+    bash "$BUILD_SCRIPT" || build_status=$?
 
     # build.sh 已退出：若构建成功，事务核心（源码已切到新版本 + 构建通过）已
     # 提交，立即解除中断 trap——否则下方到 _print_success_summary 前的窗口期
     # SIGINT 会经 _cleanup_on_interrupt 回滚源码，而 build 产物/stamp 仍为新
     # 版本，造成源码 HEAD 与 stamp 不一致（下次 check_build_health 误判）。
-    # 失败路径（build_status!=0）保持武装，进入下方回滚分支（723 处亦解除）
+    # 失败路径（build_status!=0）保持武装，进入下方回滚分支
     if [[ "$build_status" -eq 0 ]]; then
         llama_cleanup_trap
+    elif [[ "$need_source_update" -eq 0 ]]; then
+        # 纯重建（无更新事务）：源码从未被触碰——"回滚"会 checkout 同一
+        # commit 并做无谓的网络 submodule update，打印"正在回滚"消息并以
+        # 退出码 2（更新事务失败）退出均为语义误报（cron/CI 会把普通构建
+        # 失败误判为更新失败）。按普通构建失败处理；未完成构建目录已由
+        # build.sh 自身的 trap 清理。中断 trap 亦无需解除——llama_die 经
+        # llama_safe_exit 统一解除
+        llama_die "重新构建失败 (退出码: ${build_status})，源码未改动"
     fi
 
     # 更新前的版本优先使用 tag，获取不到时回退到 commit id
@@ -964,15 +980,16 @@ _build_with_rollback() {
         llama_release_lock
         llama_warn "新版本构建失败，尝试在回滚版本上重新构建..."
         llama_step "回滚后重新构建..."
-        local rollback_build_status
-        llama_run_silent rollback_build_status bash "$BUILD_SCRIPT"
+        # 直跑：与首次构建同理，回滚后重建的进度同样需要流式可见
+        local rollback_build_status=0
+        bash "$BUILD_SCRIPT" || rollback_build_status=$?
         if [[ "$rollback_build_status" -ne 0 ]]; then
             llama_err "回滚后构建也失败"
             _print_recovery_steps
             llama_die "回滚后构建也失败，请手动恢复到 $(_short_sha "$current_commit") 后重试"
         fi
         # 已回滚并重建成功——环境恢复可用，视同成功事务：解除信号 trap，
-        # 避免摘要打印期间 SIGINT 触发 _cleanup_on_interrupt 再次回滚（与 693 对称）
+        # 避免摘要打印期间 SIGINT 触发 _cleanup_on_interrupt 再次回滚（与上方成功分支对称）
         llama_cleanup_trap
         llama_ok "更新失败但已回滚并重新构建成功"
         _print_success_summary 0 "${before_ver}" "${release_tag} (构建失败，已回滚)" ""
@@ -981,7 +998,7 @@ _build_with_rollback() {
         # 并继续部署（实际运行旧版本）；exit 1 又会掩盖"环境已恢复可用"
         llama_safe_exit 2
     fi
-    # 成功路径的中断 trap 已在上方 693 处解除（build_status==0 分支）；失败
+    # 成功路径的中断 trap 已在上方 build_status==0 分支解除；失败
     # 路径经上方 die/safe_exit 退出，均不可达此处，故无需重复解除
     _print_success_summary "${need_source_update}" "${before_ver}" "${release_tag}" "${release_date:-}"
 
