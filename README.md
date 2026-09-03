@@ -189,10 +189,13 @@ bash build.sh -i    # 增量构建（保留 build 目录，仅重新编译变更
 查询 GitHub 最新构建标签，拉取、切换、同步子模块并重新构建。优先使用 `gh` CLI，回退到 `curl`。
 
 ```bash
-bash update.sh         # 更新到最新构建标签
-bash update.sh b8941   # 更新到指定标签
+bash update.sh         # 更新到最新正式 release
+bash update.sh -p      # 更新到最新版本（含 pre-release，如上游高频 bXXXX 标签）
+bash update.sh b8941   # 更新到指定标签（pre-release 标签同样支持）
 bash update.sh 1a2b3c4 # 更新到指定 commit（7-40 位 SHA）
 ```
+
+> 缺省目标为 GitHub "Latest" 语义下的最新**正式** release（自动排除 pre-release 与 draft）。上游 llama.cpp 以 `bXXXX` 形式高频发布 pre-release、低频发布 `v0.X.0` 正式版——需要跟进 pre-release 时加 `-p`（或 `--pre-release`）；查询在列表端点滤除 draft 后按发布时间取最新。
 
 **安全特性：** 文件锁、未提交更改检查（含子模块脏状态检查）、远程 origin 验证、构建失败自动回滚（含详细恢复指导）、中断信号处理（SIGINT/SIGTERM 时自动恢复原始版本）、旧子模块残留自动清理。
 

@@ -2,7 +2,7 @@
 # ============================================================
 # update.sh — llama.cpp 一键更新脚本
 # 功能：查询 GitHub 最新发布版本 → 拉取 → 构建
-# Usage: cd /path/to/llama.cpp_helper && bash update.sh [tag|commit]
+# Usage: cd /path/to/llama.cpp_helper && bash update.sh [-p|--pre-release] [tag|commit]
 # ============================================================
 
 # 仅在正常执行时启用严格模式（为测试提取而 source 时不启用）
@@ -42,10 +42,12 @@ _show_help() {
     llama_show_help \
         "$(basename "$0")" \
         "将 llama.cpp 更新到指定版本或最新 release，并自动重新构建。源码目录不存在/为空时自动从 GitHub 克隆（首次使用）。" \
-        "  [tag|commit]    目标版本：release 标签或 7-40 位 commit SHA（缺省=最新 release）
-  -h, --help      显示此帮助信息
-      --version   显示版本信息" \
-        "  bash update.sh                    # 更新到最新 release
+        "  [tag|commit]       目标版本：release 标签或 7-40 位 commit SHA（缺省=最新正式 release）
+  -p, --pre-release  最新版本查询范围含 pre-release（缺省仅正式 release）
+  -h, --help         显示此帮助信息
+      --version      显示版本信息" \
+        "  bash update.sh                    # 更新到最新正式 release
+  bash update.sh -p                  # 更新到最新版本（含 pre-release）
   bash update.sh b8941              # 更新到指定标签
   bash update.sh 1a2b3c4            # 更新到指定 commit（7-40 位 SHA）
   bash update.sh --help             # 显示帮助"
@@ -289,6 +291,37 @@ d = json.load(sys.stdin)
 print("\t".join(str(d[k]) for k in sys.argv[1:]))' "$@"
 }
 
+# Usage: _pick_latest_release_tag
+# gh 列表路径的选择器：stdin 为 gh release list --json 的数组，滤除 draft
+# 后按 publishedAt 取最新（同格式 ISO8601 字典序=时间序，不依赖服务端
+# 排序），stdout 输出该 release 的 tagName。无可选 release（全 draft）时
+# 返回 1，由 adapter 转为失败回退。
+# 字段名 tagName/isDraft/publishedAt 是 gh --json 的 camelCase 契约常量。
+_pick_latest_release_tag() {
+    python3 -c 'import json,sys
+rs = [r for r in json.load(sys.stdin) if not r.get("isDraft")]
+if not rs:
+    sys.exit(1)
+print(max(rs, key=lambda r: r.get("publishedAt") or "").get("tagName", ""))'
+}
+
+# Usage: _pick_latest_release_rest
+# REST 列表路径的选择器+格式器：stdin 为 GET /releases 的数组，滤除
+# draft 后按 published_at 取最新，输出与 _parse_release_json 相同形态的
+# TAB 行（tag/commit/date/url）。target_commitish 实测为字符串 SHA
+# （2026-09 实证），保留 dict→sha 兼容以防 API 形态回归。
+# 无可选 release（全 draft）时返回 1。
+_pick_latest_release_rest() {
+    python3 -c 'import json,sys
+rs = [r for r in json.load(sys.stdin) if not r.get("draft")]
+if not rs:
+    sys.exit(1)
+r = max(rs, key=lambda x: x.get("published_at") or "")
+tc = r.get("target_commitish") or ""
+tc = tc.get("sha", "") if isinstance(tc, dict) else tc
+print("\t".join([r.get("tag_name", ""), tc, r.get("published_at") or "", r.get("html_url") or ""]))'
+}
+
 # Usage: _print_success_summary <source_updated> <current_ver> <target_ver> <release_date>
 _print_success_summary() {
     local source_updated="$1"
@@ -331,41 +364,75 @@ _print_success_summary() {
 # 失败时返回非零且 stdout 无输出；一切日志走 stderr（>&2），调用点用
 # parsed=$(_fetch_latest_release) 捕获时不会混入日志。
 
-# Usage: _fetch_latest_release
+# Usage: _fetch_latest_release [include_prerelease]
 # 显式 seam：gh 可用时先走 gh adapter（失败回退 curl），否则直接 curl adapter。
+# include_prerelease=1 时目标为最新版本含 pre-release（列表端点滤 draft 后
+# 自选最新）；缺省/0 为最新正式 release（GitHub "Latest" 语义：排除
+# pre-release 与 draft），两条路径均不改缺省行为。
 # 不预检 gh auth status：未登录时 gh release view 同样失败并落入回退路径，
 # 预检不改变结果却多付一次完整 API RTT（实测约 0.8s）。
 _fetch_latest_release() {
+    local include_prerelease="${1:-0}"
     if command -v gh &>/dev/null; then
-        if _fetch_latest_release_gh; then
+        if _fetch_latest_release_gh "$include_prerelease"; then
             return 0
         fi
         llama_warn "gh 查询失败（未登录或网络问题），回退到 curl" >&2
     else
         llama_warn "gh 未安装，使用 curl 直接访问 API" >&2
     fi
-    _fetch_latest_release_curl
+    _fetch_latest_release_curl "$include_prerelease"
 }
 
-# Usage: _fetch_latest_release_gh
+# Usage: _fetch_latest_release_gh [include_prerelease]
 # gh adapter：成功输出 TAB 行，失败返回 1（不写任何全局）。
+# include_prerelease=1 走两步：gh release list --json 不提供 targetCommitish
+# 字段，先经 _pick_latest_release_tag 选出 tag，再 view 取完整四字段——
+# 输出契约与缺省模式一致；选择失败（含全 draft）即整体失败。
+# 缺省单次 view（GitHub "Latest" 排除 pre-release/draft）。
 _fetch_latest_release_gh() {
+    local include_prerelease="${1:-0}"
     local json
-    if ! json=$(gh release view --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
-        return 1
+    if [[ "$include_prerelease" == "1" ]]; then
+        # limit 20：覆盖近期发布节奏下的 draft 噪音即可
+        if ! json=$(gh release list --repo "$REPO" --limit 20 --json tagName,isDraft,publishedAt 2>/dev/null); then
+            return 1
+        fi
+        local pre_tag
+        if ! pre_tag=$(printf '%s' "$json" | _pick_latest_release_tag); then
+            return 1
+        fi
+        if [[ -z "$pre_tag" ]]; then
+            return 1
+        fi
+        if ! json=$(gh release view "$pre_tag" --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
+            return 1
+        fi
+    else
+        if ! json=$(gh release view --repo "$REPO" --json tagName,targetCommitish,publishedAt,url 2>/dev/null); then
+            return 1
+        fi
     fi
     printf '%s' "$json" | _parse_release_json tagName targetCommitish publishedAt url
 }
 
-# Usage: _fetch_latest_release_curl
+# Usage: _fetch_latest_release_curl [include_prerelease]
 # curl adapter：成功输出 TAB 行，失败返回 1（不写任何全局）。
 _fetch_latest_release_curl() {
+    local include_prerelease="${1:-0}"
     if ! command -v curl &>/dev/null; then
         llama_err "需要 curl 命令，请先安装"
         return 1
     fi
 
-    local api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    # include_prerelease=1 用列表端点自选（latest 端点恒排除 pre-release）；
+    # per_page=20 与 gh 侧 --limit 20 对齐
+    local api_url
+    if [[ "$include_prerelease" == "1" ]]; then
+        api_url="https://api.github.com/repos/${REPO}/releases?per_page=20"
+    else
+        api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    fi
     local tmp
     # mktemp 失败必须显式诊断：本函数经 if 条件调用（_fetch_latest_release →
     # _resolve_target），函数体内 set -e 失效——裸赋值失败后空 tmp 会让后续
@@ -396,31 +463,44 @@ _fetch_latest_release_curl() {
     fi
 
     # 单次 python3 提取全部字段（原每字段一个进程，共 4 次 fork）；
-    # 使用 stdin 重定向，避免路径注入到 Python 字符串中
+    # 使用 stdin 重定向，避免路径注入到 Python 字符串中。
+    # pre-release 模式由选择器从数组中选行并格式化，输出形态一致
     local parsed
-    parsed=$(_parse_release_json tag_name target_commitish published_at html_url < "$tmp") || { rm -f "$tmp"; return 1; }
+    if [[ "$include_prerelease" == "1" ]]; then
+        parsed=$(_pick_latest_release_rest < "$tmp") || { rm -f "$tmp"; return 1; }
+    else
+        parsed=$(_parse_release_json tag_name target_commitish published_at html_url < "$tmp") || { rm -f "$tmp"; return 1; }
+    fi
     rm -f "$tmp"
     printf '%s\n' "$parsed"
 }
 
 # --- 子函数 --------------------------------------------------
 
-# Usage: _parse_args <result_var> [args...]
-# 解析命令行参数；目标版本（若有）经 printf -v 写入 <result_var>（C1
-# out-param 模式），不再写脚本级全局（C4）。--help/--version 直接退出。
+# Usage: _parse_args <target_var> <pre_var> [args...]
+# 解析命令行参数；目标版本（若有）经 printf -v 写入 <target_var>，
+# pre-release 标志（-p/--pre-release）写入 <pre_var>（0/1）——均 C1
+# out-param 模式，不写脚本级全局（C4）。选项与位置参数可任意顺序组合；
+# 指定 tag/commit 时 pre-release 标志不影响结果（tag 直达，不走最新查询）。
+# --help/--version 直接退出。
 # 误用（缺失/非法变量名、保留前缀 _pa_）返回 2 大声失败。
 # 内部局部变量一律 _pa_ 前缀：动态作用域下同名的函数内 local 会遮蔽
 # 调用者变量，printf -v 曾会写到函数自己的 local 上（同 C1 的 _lrs_ 教训）
 _parse_args() {
-    local _pa_result_var="${1:-}"
-    if ! _llama_validate_out_var "$_pa_result_var" "_pa_"; then
-        llama_err "_parse_args: 非法或保留的结果变量名: ${_pa_result_var:-<缺失>}"
+    local _pa_target_var="${1:-}"
+    local _pa_pre_var="${2:-}"
+    if ! _llama_validate_out_var "$_pa_target_var" "_pa_"; then
+        llama_err "_parse_args: 非法或保留的结果变量名: ${_pa_target_var:-<缺失>}"
         return 2
     fi
-    shift
+    if ! _llama_validate_out_var "$_pa_pre_var" "_pa_"; then
+        llama_err "_parse_args: 非法或保留的结果变量名: ${_pa_pre_var:-<缺失>}"
+        return 2
+    fi
+    shift 2
 
-    local _pa_target=""
-    if (($# > 0)); then
+    local _pa_target="" _pa_pre=0
+    while (($# > 0)); do
         case "$1" in
             -h|--help)
                 _show_help
@@ -430,19 +510,24 @@ _parse_args() {
                 llama_show_version
                 llama_safe_exit 0
                 ;;
+            -p|--pre-release)
+                _pa_pre=1
+                ;;
             -*)
                 llama_die "未知选项: $1"
                 ;;
             *)
-                _pa_target="$1"
+                if [[ -n "$_pa_target" ]]; then
+                    llama_warn "忽略额外参数: $1"
+                else
+                    _pa_target="$1"
+                fi
                 ;;
         esac
         shift
-        if (($# > 0)); then
-            llama_warn "忽略额外参数: $*"
-        fi
-    fi
-    printf -v "$_pa_result_var" '%s' "$_pa_target"
+    done
+    printf -v "$_pa_target_var" '%s' "$_pa_target"
+    printf -v "$_pa_pre_var" '%s' "$_pa_pre"
 }
 
 # Usage: _ensure_source_repo [url]
@@ -620,8 +705,9 @@ _check_local_repo() {
     llama_detail "当前标签:    ${current_tag:-(无标签)}"
 }
 
-# Usage: _resolve_target [target_version]
-# 解析目标版本（用户指定经参数传入，否则经 seam 查询最新 release），
+# Usage: _resolve_target [target_version] [include_prerelease]
+# 解析目标版本（用户指定经参数传入，否则经 seam 查询最新 release——
+# include_prerelease=1 时查询范围含 pre-release），
 # 与当前版本对比后写入更新决策（need_source_update/skip_update——本函数
 # 是两全局的唯一写入入口，两态显式写，可重入）。
 _resolve_target() {
@@ -629,6 +715,7 @@ _resolve_target() {
     # release_tag/release_date 跨函数使用（构建摘要/恢复指引），
     # 经 _session_set_target 写入（唯一入口）
     local target_version="${1:-}"
+    local include_prerelease="${2:-0}"
     local rel_commit="" rel_url="" rel_tag="" rel_date=""
     if [[ -n "$target_version" ]]; then
         rel_tag="$target_version"
@@ -641,10 +728,14 @@ _resolve_target() {
         fi
         llama_info "使用用户指定的版本: ${rel_tag}"
     else
-        llama_info "正在查询 GitHub 最新发布版本..."
+        if [[ "$include_prerelease" == "1" ]]; then
+            llama_info "正在查询 GitHub 最新发布版本（含 pre-release）..."
+        else
+            llama_info "正在查询 GitHub 最新发布版本..."
+        fi
         # C5：选择逻辑（gh→curl 回退）收在 seam 内部；此处只消费 TAB 行
         local parsed
-        if ! parsed=$(_fetch_latest_release); then
+        if ! parsed=$(_fetch_latest_release "$include_prerelease"); then
             llama_die "无法获取最新版本信息"
         fi
         IFS=$'\t' read -r rel_tag rel_commit rel_date rel_url <<< "$parsed"
@@ -878,16 +969,17 @@ _build_with_rollback() {
 # --- 主逻辑 --------------------------------------------------
 main() {
     llama_step "llama.cpp 一键更新脚本"
-    # target_version 是 main 局部变量，经 out-param/参数传递（C4）
-    local target_version=""
-    _parse_args target_version "$@"
+    # target_version/include_prerelease 是 main 局部变量，经 out-param/
+    # 参数传递（C4）
+    local target_version="" include_prerelease=0
+    _parse_args target_version include_prerelease "$@"
     # 文件锁在参数解析之后获取（--help/--version 不受锁占用影响）
     llama_acquire_lock || llama_die "无法获取文件锁"
     llama_activate_conda  # 激活 conda 环境（确保 python3/git 等可用）
     _ensure_source_repo   # 首次使用：目录缺失/为空时自动克隆（持锁状态下）
     _normalize_src_path
     _check_local_repo
-    _resolve_target "$target_version"
+    _resolve_target "$target_version" "$include_prerelease"
     if [[ "${skip_update:-0}" -eq 1 ]]; then
         llama_safe_exit 0
     fi

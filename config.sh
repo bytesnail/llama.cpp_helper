@@ -97,5 +97,5 @@ GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-15}"      # 秒
 declare -ar REQUIRED_BINARIES=("llama-cli" "llama-server")
 
 # --- 版本号 ---------------------------------------------------
-LLAMA_HELPER_VERSION="1.0.0"
+LLAMA_HELPER_VERSION="1.1.0"
 readonly LLAMA_HELPER_VERSION

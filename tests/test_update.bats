@@ -473,27 +473,66 @@ MOCK_GIT_EOF
 @test "_parse_args writes target version via out-param" {
     _load_update
 
-    local target=""
-    _parse_args target "b4000"
+    local target="" pre=9
+    _parse_args target pre "b4000"
     [ "$target" = "b4000" ]
+    [ "$pre" -eq 0 ]
 }
 
 @test "_parse_args writes empty target when no args" {
     _load_update
 
-    local target="stale"
-    _parse_args target
+    local target="stale" pre=9
+    _parse_args target pre
     [ -z "$target" ]
+    [ "$pre" -eq 0 ]
 }
 
 @test "_parse_args rejects invalid out-param names" {
     _load_update
 
-    # 保留前缀（函数内部局部变量命名空间）与非标识符名均拒绝（C1 防呆模式）
-    run _parse_args "_pa_reserved" b4000
+    # 保留前缀（函数内部局部变量命名空间）与非标识符名均拒绝（C1 防呆模式）；
+    # 两个 out-param 任一非法即整体拒绝
+    run _parse_args "_pa_reserved" pre b4000
     [ "$status" -eq 2 ]
-    run _parse_args "1bad-name" b4000
+    run _parse_args target "1bad-name" b4000
     [ "$status" -eq 2 ]
+}
+
+@test "_parse_args sets include_prerelease flag with -p or --pre-release" {
+    _load_update
+
+    local target="stale" pre=0
+    _parse_args target pre -p
+    [ "$pre" -eq 1 ]
+    # out-param 恒写语义：无位置参数时 target 被清空（不保留旧值）
+    [ -z "$target" ]
+
+    pre=0
+    _parse_args target pre --pre-release
+    [ "$pre" -eq 1 ]
+}
+
+@test "_parse_args accepts flag and positional target in either order" {
+    _load_update
+
+    local target="" pre=0
+    _parse_args target pre -p b6000
+    [ "$target" = "b6000" ]
+    [ "$pre" -eq 1 ]
+
+    target="" pre=0
+    _parse_args target pre b6000 --pre-release
+    [ "$target" = "b6000" ]
+    [ "$pre" -eq 1 ]
+}
+
+@test "_parse_args rejects unknown options" {
+    _load_update
+
+    run _parse_args target pre -x
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"未知选项"* ]]
 }
 
 # --- _resolve_target 单元测试 ---
@@ -643,13 +682,13 @@ MOCK_EOF
     mkdir -p "$mock_dir"
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
-printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc123def4567890abc123def4567890abc12345","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
 
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release_gh'
     [ "$status" -eq 0 ]
-    [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
+    [ "$output" = "$(printf 'b4000\tabc123def4567890abc123def4567890abc12345\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
 }
 
 @test "_fetch_latest_release_gh writes no release_* globals" {
@@ -658,7 +697,7 @@ MOCK_EOF
     mkdir -p "$mock_dir"
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
-printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc123def4567890abc123def4567890abc12345","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
 
@@ -750,7 +789,7 @@ _run_fetch_with_path() {
     # 未认证时 release view 本身即失败并回退，预检是白付的一次 RTT）
     cat > "${mock_dir}/gh" << 'MOCK_EOF'
 #!/bin/bash
-printf '%s' '{"tagName":"b4000","targetCommitish":"abc1234567890abcdef1234567890abcdef12","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
+printf '%s' '{"tagName":"b4000","targetCommitish":"abc123def4567890abc123def4567890abc12345","publishedAt":"2026-01-15T10:30:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b4000"}'
 MOCK_EOF
     chmod +x "${mock_dir}/gh"
     # curl stub 输出不同 tag——若其内容出现在 stdout 说明选择逻辑错误
@@ -760,7 +799,7 @@ MOCK_EOF
     # stderr 丢弃：精确等值断言同时钉住「选择日志不污染 stdout」的 seam 契约
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 0 ]
-    [ "$output" = "$(printf 'b4000\tabc1234567890abcdef1234567890abcdef12\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
+    [ "$output" = "$(printf 'b4000\tabc123def4567890abc123def4567890abc12345\t2026-01-15T10:30:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b4000')" ]
 }
 
 @test "_fetch_latest_release falls back to curl when gh query fails" {
@@ -804,6 +843,147 @@ MOCK_EOF
 
     _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
     [ "$status" -eq 1 ]
+}
+
+# --- pre-release 模式（include_prerelease=1）测试 ---
+# mock 数据语义（与真实 API 实测形态对齐，2026-09）：
+#   - 上游近期以 bXXXX pre-release 高频发布，正式版低频（v0.X.0）
+#   - REST 的 target_commitish 为字符串 SHA（非对象）
+#   - 列表故意乱序 + draft 时间最新：钉住"滤 draft、按 publishedAt 取最新、
+#     不依赖服务端排序"
+
+# Usage: _make_gh_dispatch_mock <mock_dir>
+# 构造按子命令分发的 gh stub（argv 形态：gh release <list|view> [tag] --repo ...）：
+#   list → 输出乱序数组（含时间最新的 draft 与 pre-release/正式版）
+#   view <tag> → 仅接受 b10799（收错 tag 即失败——钉住 list 选出的 tag 被
+#               正确转发给 view）
+#   view（无 tag，默认模式，$3 == --repo）→ 输出正式版 v0.3.0
+# 每次调用的子命令（$2）追加到 <mock_dir>/gh_calls.log，供调用序列断言。
+_make_gh_dispatch_mock() {
+    local mock_dir="$1"
+    mkdir -p "$mock_dir"
+    cat > "${mock_dir}/gh" << 'MOCK_EOF'
+#!/bin/bash
+echo "$2" >> "$(dirname "$0")/gh_calls.log"
+if [[ "$2" == "list" ]]; then
+    printf '%s' '[{"tagName":"v0.3.0","isDraft":false,"publishedAt":"2026-08-25T10:22:58Z"},{"tagName":"b10800","isDraft":true,"publishedAt":"2026-09-04T10:00:00Z"},{"tagName":"b10799","isDraft":false,"publishedAt":"2026-09-04T09:00:00Z"}]'
+    exit 0
+fi
+if [[ "$2" == "view" ]]; then
+    if [[ "${3:-}" == "--repo" ]]; then
+        printf '%s' '{"tagName":"v0.3.0","targetCommitish":"fedcba0987654321fedcba0987654321fedcba09","publishedAt":"2026-08-25T10:22:58Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/v0.3.0"}'
+        exit 0
+    fi
+    if [[ "${3:-}" != "b10799" ]]; then
+        exit 1
+    fi
+    printf '%s' '{"tagName":"b10799","targetCommitish":"abc123def4567890abc123def4567890abc12345","publishedAt":"2026-09-04T09:00:00Z","url":"https://github.com/ggml-org/llama.cpp/releases/tag/b10799"}'
+    exit 0
+fi
+exit 1
+MOCK_EOF
+    chmod +x "${mock_dir}/gh"
+}
+
+# REST 列表 mock 载荷（_mock_curl_response 的 body 参数）：乱序数组，
+# draft 时间最新（必须被滤除），次新为 pre-release b10799（应被选中）
+_prerelease_rest_list='[{"tag_name":"b10800","target_commitish":"1111111111111111111111111111111111111111","draft":true,"prerelease":true,"published_at":"2026-09-04T10:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b10800"},{"tag_name":"b10799","target_commitish":"abc123def4567890abc123def4567890abc12345","draft":false,"prerelease":true,"published_at":"2026-09-04T09:00:00Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/b10799"},{"tag_name":"v0.3.0","target_commitish":"fedcba0987654321fedcba0987654321fedcba09","draft":false,"prerelease":false,"published_at":"2026-08-25T10:22:58Z","html_url":"https://github.com/ggml-org/llama.cpp/releases/tag/v0.3.0"}]'
+
+@test "_fetch_latest_release_gh pre-release mode: list → pick non-draft latest → view" {
+    local mock_dir="${TEST_TMPDIR}/mock"
+    _make_gh_dispatch_mock "$mock_dir"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_gh 1'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b10799\tabc123def4567890abc123def4567890abc12345\t2026-09-04T09:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b10799')" ]
+    # 调用序列：先 list 选 tag，再 view 取详情（两步契约）
+    [ "$(cat "${mock_dir}/gh_calls.log")" = "$(printf 'list\nview')" ]
+}
+
+@test "_fetch_latest_release_gh pre-release mode: all-draft list yields failure" {
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    cat > "${mock_dir}/gh" << 'MOCK_EOF'
+#!/bin/bash
+echo "$2" >> "$(dirname "$0")/gh_calls.log"
+if [[ "$2" == "list" ]]; then
+    printf '%s' '[{"tagName":"d1","isDraft":true,"publishedAt":"2026-09-04T10:00:00Z"}]'
+    exit 0
+fi
+exit 1
+MOCK_EOF
+    chmod +x "${mock_dir}/gh"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_gh 1 2>/dev/null'
+    [ "$status" -eq 1 ]
+    # 全 draft：选择器失败后不发起 view
+    [ "$(cat "${mock_dir}/gh_calls.log")" = "list" ]
+}
+
+@test "_fetch_latest_release_curl pre-release mode: picks latest non-draft from list endpoint" {
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 "$_prerelease_rest_list")"
+
+    local isolated_tmp="${TEST_TMPDIR}/isolated_tmp"
+    mkdir -p "$isolated_tmp"
+
+    _run_fetch_with_path "$mock_dir" "TMPDIR='$isolated_tmp' _fetch_latest_release_curl 1"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b10799\tabc123def4567890abc123def4567890abc12345\t2026-09-04T09:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b10799')" ]
+    ! ls "$isolated_tmp"/llama_release.*.json 2>/dev/null
+}
+
+@test "_fetch_latest_release_curl pre-release mode returns 1 on invalid JSON" {
+    local mock_dir="${TEST_TMPDIR}/mock"
+    mkdir -p "$mock_dir"
+    _make_stub_exec "${mock_dir}/curl" \
+        "$(_mock_curl_response 200 'not json')"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release_curl 1 2>&1'
+    [ "$status" -eq 1 ]
+}
+
+@test "_fetch_latest_release forwards pre-release mode to gh adapter" {
+    local mock_dir="${TEST_TMPDIR}/mock"
+    _make_gh_dispatch_mock "$mock_dir"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release 1 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b10799\tabc123def4567890abc123def4567890abc12345\t2026-09-04T09:00:00Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/b10799')" ]
+    [ "$(cat "${mock_dir}/gh_calls.log")" = "$(printf 'list\nview')" ]
+}
+
+@test "_fetch_latest_release default mode still queries formal latest only" {
+    # 目标契约的直接钉子：不带 include_prerelease 时不得触碰 list 路径
+    #（/releases/latest 语义排除 pre-release），仍走单次 view
+    local mock_dir="${TEST_TMPDIR}/mock"
+    _make_gh_dispatch_mock "$mock_dir"
+
+    _run_fetch_with_path "$mock_dir" '_fetch_latest_release 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'v0.3.0\tfedcba0987654321fedcba0987654321fedcba09\t2026-08-25T10:22:58Z\thttps://github.com/ggml-org/llama.cpp/releases/tag/v0.3.0')" ]
+    [ "$(cat "${mock_dir}/gh_calls.log")" = "view" ]
+}
+
+@test "_resolve_target passes include_prerelease through seam" {
+    _load_update
+
+    local mock_dir="${TEST_TMPDIR}/mock"
+    _make_gh_dispatch_mock "$mock_dir"
+    # curl 一并 stub 掉：gh 万一失败也不得触网（离线测试纪律）
+    _make_stub_exec "${mock_dir}/curl" "exit 1"
+    PATH="${mock_dir}:$PATH"
+
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    current_commit=$(git -C "$fake_repo" rev-parse HEAD)
+    current_tag=""
+
+    _resolve_target "" 1 > "${TEST_TMPDIR}/out.txt"
+    [ "$release_tag" = "b10799" ]
+    [ "$release_date" = "2026-09-04T09:00:00Z" ]
+    grep -qF "对应 Commit: abc123d (abc123def4567890abc123def4567890abc12345)" "${TEST_TMPDIR}/out.txt"
 }
 
 @test "_clone_repo clones a local file:// repo with tags" {
