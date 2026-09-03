@@ -591,6 +591,65 @@ MOCK_GIT_EOF
     [ "$need_source_update" -eq 0 ]
 }
 
+@test "_resolve_target: tag name matches but remote re-pointed → needs update" {
+    # 回归：名字短路曾把"本地 tag 同名但远端已重指"判为"本地已在该版本"，
+    # 用户被静默钉在过期代码上（fetch --force 只修了执行层，决策层仍信任名字）
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    # 本地 bare 仓作 origin（路径直连，测试全程离线）
+    git init -q --bare "${TEST_TMPDIR}/origin.git"
+    git -C "$fake_repo" remote add origin "${TEST_TMPDIR}/origin.git"
+
+    # C1 打 tag b4000 并推送
+    git -C "$fake_repo" tag b4000 HEAD
+    git -C "$fake_repo" push -q origin "refs/tags/b4000"
+
+    # 远端 re-point：C2 上强推同名标签，本地退回 C1 并把本地标签拉回 C1
+    git -C "$fake_repo" commit --allow-empty -q -m "C2"
+    git -C "$fake_repo" tag -f b4000 HEAD >/dev/null
+    git -C "$fake_repo" push -q -f origin "refs/tags/b4000"
+    git -C "$fake_repo" checkout -q HEAD~1
+    git -C "$fake_repo" tag -f b4000 HEAD >/dev/null
+
+    _session_capture_current
+    [ "$current_tag" = "b4000" ]
+
+    _resolve_target b4000 > "${TEST_TMPDIR}/out.txt"
+    [ "$need_source_update" -eq 1 ]
+    grep -q "与远端不一致" "${TEST_TMPDIR}/out.txt"
+}
+
+@test "_resolve_target: tag name matches and remote agrees → no update" {
+    # 名字短路 + commit 级比对都通过（本地与 origin 的 tag ref SHA 一致）
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    git init -q --bare "${TEST_TMPDIR}/origin.git"
+    git -C "$fake_repo" remote add origin "${TEST_TMPDIR}/origin.git"
+    git -C "$fake_repo" tag b4000 HEAD
+    git -C "$fake_repo" push -q origin "refs/tags/b4000"
+
+    _session_capture_current
+    _resolve_target b4000 > "${TEST_TMPDIR}/out.txt"
+    [ "$need_source_update" -eq 0 ]
+}
+
+@test "_resolve_target: tag compare degrades to name match when ls-remote fails" {
+    # 离线降级：origin 不可达时按本地标签名判定（不阻断用户指定 tag 的离线路径）
+    _load_update
+
+    local fake_repo="${TEST_TMPDIR}/llama.cpp"
+    git -C "$fake_repo" tag b4000 HEAD
+    # origin 指向不存在路径：ls-remote 失败 → 降级
+    git -C "$fake_repo" remote add origin "${TEST_TMPDIR}/no-such-origin.git"
+
+    _session_capture_current
+    _resolve_target b4000 > "${TEST_TMPDIR}/out.txt"
+    [ "$need_source_update" -eq 0 ]
+    grep -q "按本地标签名判定" "${TEST_TMPDIR}/out.txt"
+}
+
 @test "_resolve_target: already on user-specified short SHA → no source update needed" {
     # 回归：短 SHA（7-39 位 hex）用户输入此前因 40 位门槛永不写入
     # rel_commit，「已是目标 commit」短路对该类输入是死代码——已在该

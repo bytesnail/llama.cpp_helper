@@ -765,8 +765,26 @@ _resolve_target() {
     need_source_update=1
     skip_update=0
     if [[ "${current_tag}" = "${release_tag}" ]]; then
-        llama_ok "本地已在该版本 (${release_tag})，无需更新源码"
-        need_source_update=0
+        # tag 名一致 ≠ commit 一致：上游重指标签（或本地残留同名旧标签）时，
+        # 本地 refs/tags/<tag> 仍指旧 commit，名字短路会把用户钉在过期代码上
+        # 并谎报"本地已在该版本"。比对本地与远端的 tag ref SHA（同一 tag 对象
+        # 必然同一指向，无需解析 deref）：
+        #   不等   → 保持 need_source_update=1，_update_source 的
+        #            fetch --force --tags 会刷新本地标签并切到正确 commit
+        #   查询失败/远端无此标签 → 降级按名字判定（用户指定 tag 的离线路径
+        #            不被网络阻断），但警告——名字判定在 re-point 后不可信
+        local local_tag_sha remote_tag_sha
+        local_tag_sha=$(git -C "$LLAMA_CPP_SRC" rev-parse --verify --quiet "refs/tags/${release_tag}" 2>/dev/null || true)
+        remote_tag_sha=$(_git_net ls-remote origin "refs/tags/${release_tag}" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+        if [[ -n "$remote_tag_sha" && "$local_tag_sha" != "$remote_tag_sha" ]]; then
+            llama_warn "本地标签 ${release_tag} 与远端不一致（上游重指标签？），将刷新标签并更新"
+        else
+            if [[ -z "$remote_tag_sha" ]]; then
+                llama_warn "无法比对远端标签（离线或 origin 不可达），按本地标签名判定"
+            fi
+            llama_ok "本地已在该版本 (${release_tag})，无需更新源码"
+            need_source_update=0
+        fi
     elif [[ ${#rel_commit} -ge 7 ]] && [[ "$(git -C "$LLAMA_CPP_SRC" rev-parse --verify "${rel_commit}^{commit}" 2>/dev/null)" == "$current_commit" ]]; then
         # 一条路径同时覆盖完整 SHA 与可解析 commitish（分支名/短 SHA）
         llama_ok "本地已是最新 commit (${rel_short})，无需更新源码"
