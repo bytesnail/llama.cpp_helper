@@ -217,3 +217,16 @@ load test_helper
     [ -n "$normalize_line" ]
     [ "$ensure_line" -lt "$normalize_line" ]
 }
+
+@test "build.sh main calls _pin_host_toolchain after llama_activate_conda" {
+    # conda 激活把 env bin（含交叉 binutils 裸名 ld/as）推到 PATH 最前，
+    # 钉住 COMPILER_PATH 必须紧随其后：调用点丢失会使 CMake try_compile
+    # 被 conda ld 劫持而失败（链接系统 glibc 报 GLIBC_PRIVATE 符号未定义）
+    local body activate_line pin_line
+    body=$(sed -n '/^main()/,/^}/p' "${BATS_TEST_DIRNAME}/../build.sh")
+    activate_line=$(grep -n '^[[:space:]]*llama_activate_conda' <<< "$body" | head -1 | cut -d: -f1)
+    pin_line=$(grep -n '^[[:space:]]*_pin_host_toolchain' <<< "$body" | head -1 | cut -d: -f1)
+    [ -n "$activate_line" ]
+    [ -n "$pin_line" ]
+    [ "$activate_line" -lt "$pin_line" ]
+}

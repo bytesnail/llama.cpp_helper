@@ -43,6 +43,12 @@ readonly REPO_URL
 # --- 资源限制和路径 ------------------------------------------
 MIN_FREE_DISK_GB=10
 readonly MIN_FREE_DISK_GB
+
+# host 工具链（gcc 的 ld/as 等子程序）查找目录：conda 激活后 env bin 优先于
+# 系统 PATH，其中的交叉 binutils（sysroot_linux-64 依赖链带入）裸名 ld/as
+# 会劫持系统 gcc 的链接——conda ld 为 glibc 2.28 sysroot 构建，链接系统
+# glibc 报 GLIBC_PRIVATE 符号未定义，CMake try_compile 即失败
+LLAMA_HOST_TOOLCHAIN_BIN="${LLAMA_HOST_TOOLCHAIN_BIN:-/usr/bin}"
 LOCK_FILE="${LOCK_FILE:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/llama_cpp_helper-${UID}.lock}"
 readonly LOCK_FILE
 

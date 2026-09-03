@@ -119,3 +119,22 @@ load test_helper
     [ "$status" -eq 0 ]
     [[ "$output" =~ "OpenBLAS 链接正常" ]]
 }
+
+@test "_pin_host_toolchain sets COMPILER_PATH to host toolchain bin when unset" {
+    # 回归：conda 环境激活后 env bin 的交叉 binutils（sysroot_linux-64 依赖链）
+    # 裸名 ld 会劫持系统 gcc 的链接（链接系统 glibc 报 GLIBC_PRIVATE 符号
+    # 未定义，CMake try_compile 即失败）——gcc 子程序查找必须钉到系统目录
+    _load_build
+    unset COMPILER_PATH
+
+    _pin_host_toolchain
+    [[ "$COMPILER_PATH" == "$LLAMA_HOST_TOOLCHAIN_BIN" ]]
+}
+
+@test "_pin_host_toolchain preserves pre-existing COMPILER_PATH after prefix" {
+    _load_build
+    COMPILER_PATH="/opt/custom-tools"
+
+    _pin_host_toolchain
+    [[ "$COMPILER_PATH" == "${LLAMA_HOST_TOOLCHAIN_BIN}:/opt/custom-tools" ]]
+}

@@ -242,6 +242,17 @@ _verify_build() {
     return "$errors"
 }
 
+# Usage: _pin_host_toolchain
+# 激活 conda 后调用（调用点紧随 llama_activate_conda）：gcc 从 PATH 查找
+# ld/as 等子程序，conda 环境带入的交叉 binutils 裸名工具位于 env bin 最前，
+# 会劫持链接（见 config.sh 的 LLAMA_HOST_TOOLCHAIN_BIN 注释）。COMPILER_PATH
+# 是 gcc 子程序搜索的官方机制且优先于 PATH，钉到系统 binutils 目录恢复匹配；
+# 已有值保留在前缀之后，不破坏调用者的自定义配置。
+_pin_host_toolchain() {
+    export COMPILER_PATH="${LLAMA_HOST_TOOLCHAIN_BIN}${COMPILER_PATH:+:${COMPILER_PATH}}"
+    llama_detail "host 工具链查找路径 (COMPILER_PATH): ${COMPILER_PATH}"
+}
+
 # --- 主逻辑 --------------------------------------------------
 main() {
 incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
@@ -276,6 +287,9 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     # --- 前置检查 ------------------------------------------------
     # 激活 conda 环境（如果 CUDA 工具链通过 conda 安装）
     llama_activate_conda
+    # 劫持由激活引入，钉住也须紧随其后：CMake try_compile 经环境继承，
+    # nvcc 驱动 host 链接同样走 gcc 子进程——均在 CMake 配置前覆盖
+    _pin_host_toolchain
 
     llama_step "前置检查"
 
