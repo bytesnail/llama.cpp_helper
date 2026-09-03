@@ -173,6 +173,56 @@ setup() {
     llama_release_lock
 }
 
+@test "llama_acquire_lock_wait waits for the holder to exit and acquires" {
+    # 阻塞等待语义：后台持锁 1 秒后释放，wait 版应等到并成功获取
+    # （对应 update.sh 回滚前等待 build.sh 释放的真实场景）
+    local ready_file="${TEST_TMPDIR}/lock_held.ready"
+    (
+        _load_common
+        LOCK_FILE="${LOCK_FILE}" llama_acquire_lock
+        : > "$ready_file"
+        sleep 1
+        LOCK_FILE="${LOCK_FILE}" llama_release_lock
+    ) &
+    local bg_pid=$!
+    local waited=0
+    while [[ ! -f "$ready_file" ]] && (( waited < 100 )); do
+        sleep 0.05
+        (( ++waited ))
+    done
+    [[ -f "$ready_file" ]]
+    llama_acquire_lock_wait 10
+    [ "$?" -eq 0 ]
+    [ -n "${LOCK_FD:-}" ]
+    kill "$bg_pid" 2>/dev/null || true
+    wait "$bg_pid" 2>/dev/null || true
+    llama_release_lock
+}
+
+@test "llama_acquire_lock_wait times out when the holder keeps the lock" {
+    local ready_file="${TEST_TMPDIR}/lock_held.ready"
+    (
+        _load_common
+        LOCK_FILE="${LOCK_FILE}" llama_acquire_lock
+        : > "$ready_file"
+        sleep 5
+        LOCK_FILE="${LOCK_FILE}" llama_release_lock
+    ) &
+    local bg_pid=$!
+    local waited=0
+    while [[ ! -f "$ready_file" ]] && (( waited < 100 )); do
+        sleep 0.05
+        (( ++waited ))
+    done
+    [[ -f "$ready_file" ]]
+    run llama_acquire_lock_wait 1
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "等待锁超时" ]]
+    kill "$bg_pid" 2>/dev/null || true
+    wait "$bg_pid" 2>/dev/null || true
+    llama_release_lock
+}
+
 @test "llama_release_lock cleans up LOCK_FD" {
     llama_acquire_lock
     local fd="${LOCK_FD}"

@@ -533,12 +533,17 @@ llama_activate_conda() {
 # OOM-kill 而 fork 的子进程仍幸存时，锁可能延迟至孤儿退出才释放。
 
 # Usage: _lock_grab <lock_file>
-# 打开锁文件、非阻塞 flock、写入持有者 PID。
-# 返回：0=成功（设置 LOCK_FD），1=锁被占用，2=锁文件无法打开/写入（已输出错误）。
-# 内部辅助 — 供 llama_acquire_lock 与 _recover_stale_lock 复用，消除两份
-# 「exec {fd}>> → flock -n → 截断 → 写 PID → LOCK_FD=$fd」重复拷贝。
+# 打开锁文件、flock、写入持有者 PID。
+# 返回：0=成功（设置 LOCK_FD），1=锁被占用（或等待超时），2=锁文件无法
+# 打开/写入（已输出错误）。
+# 内部辅助 — 供 llama_acquire_lock / llama_acquire_lock_wait 与
+# _recover_stale_lock 复用，消除多份「exec {fd}>> → flock → 截断 → 写 PID
+# → LOCK_FD=$fd」重复拷贝。
+# $2（wait_sec，缺省 0）＝ flock 模式：0 为非阻塞（flock -n，历史行为）；
+# 正数为阻塞等待（flock -w <wait_sec>），供"持锁者已知将退出"的场景。
 _lock_grab() {
     local lock_file="$1"
+    local wait_sec="${2:-0}"
     local fd
     # 拒绝符号链接与非常规文件：XDG_RUNTIME_DIR 缺失时锁文件路径退化为可预测的
     # /tmp/llama_cpp_helper-<UID>.lock（config.sh），exec {fd}>> 与下方的
@@ -552,7 +557,13 @@ _lock_grab() {
         llama_err "无法打开锁文件: ${lock_file}"
         return 2
     fi
-    if ! flock -n "$fd"; then
+    local -a flock_args
+    if ((wait_sec > 0)); then
+        flock_args=(-w "$wait_sec")
+    else
+        flock_args=(-n)
+    fi
+    if ! flock "${flock_args[@]}" "$fd"; then
         # bash 关闭已关闭/无效的 fd 静默返回 0——这里不能加 2>/dev/null：
         # 无命令 exec 的重定向会永久改变当前 shell 的 stderr，
         # 实测会吞掉调用点之后的全部 llama_err 输出
@@ -647,6 +658,42 @@ llama_acquire_lock() {
         return 1
     fi
     _recover_stale_lock "$lock_file"
+}
+
+# Usage: llama_acquire_lock_wait <timeout_sec> [lock_file]
+# 阻塞等待版锁获取（flock -w <timeout_sec>）：持锁者为已知将在超时内退出的
+# 子进程时使用——如 update.sh 中断回滚前等待 build.sh 释放（SIGINT 同步
+# 送达前台进程组，build.sh 的 trap 清理构建目录后即退出；删除 GB 级构建
+# 目录在慢盘上可达分钟级）。成功返回 0（设置 LOCK_FD），超时/打开失败
+# 返回 1（已输出错误）。
+# 与 llama_acquire_lock 的差异：不做"持有者 PID 已死"的残留锁诊断——等待
+# 语义下由超时统一兜底（持有者进程退出后 flock 内核锁自动释放，无需恢复
+# 路径；文件内残留的旧 PID 会被下方的截断写覆盖）。
+llama_acquire_lock_wait() {
+    local timeout_sec="$1"
+    local lock_file="${2:-${LOCK_FILE:-}}"
+    if [[ -z "$lock_file" ]]; then
+        llama_err "未指定锁文件路径"
+        return 1
+    fi
+    if ! command -v flock &>/dev/null; then
+        llama_err "缺少 flock 命令（通常由 util-linux 包提供），无法进行文件锁检查"
+        return 1
+    fi
+    local lock_dir
+    lock_dir=$(dirname "$lock_file")
+    if [[ ! -d "$lock_dir" ]]; then
+        if ! mkdir -p "$lock_dir" 2>/dev/null; then
+            llama_err "无法创建锁目录: ${lock_dir}"
+            return 1
+        fi
+    fi
+    # symlink 拒绝/PID 写入由 _lock_grab 统一处理（与非阻塞路径同款契约）
+    if _lock_grab "$lock_file" "$timeout_sec"; then
+        return 0
+    fi
+    llama_err "等待锁超时（${timeout_sec}s）或锁文件不可用: ${lock_file}"
+    return 1
 }
 
 # Usage: llama_release_lock

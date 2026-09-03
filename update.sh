@@ -103,14 +103,19 @@ _cleanup_clone_artifacts() {
 
 # Usage: _ensure_lock_for_rollback
 # 回滚修改源码树前的持锁策略（_build_with_rollback 与 _cleanup_on_interrupt
-# 共用）：本进程已持锁（LOCK_FD 非空）则跳过；否则重取——取锁失败不阻塞
-# 回滚（安全路径必须执行），仅警告。
+# 共用）：本进程已持锁（LOCK_FD 非空）则跳过；否则阻塞等待重取——重取
+# 场景的持锁者通常是本进程自己的 build.sh 子进程（锁在启动子进程前已释
+# 放给它）：中断/构建失败路径上子进程正在退出（trap 清理构建目录后即释
+# 放，删除 GB 级目录在慢盘上可达分钟级），立即放弃会与仍在写 .build-stamp
+# 的子进程并发回滚，可能把混合构建盖上旧 commit 的健康戳。
+# 等待超时（子进程卡死/外部进程持锁）才降级为无锁回滚——"安全路径必须
+# 执行"的原则不变，只是竞争窗口从常态缩到极端场景。
 _ensure_lock_for_rollback() {
     if [[ -n "${LOCK_FD:-}" ]]; then
         return 0
     fi
-    if ! llama_acquire_lock; then
-        llama_warn "无法重新获取锁，回滚将在无锁保护下进行"
+    if ! llama_acquire_lock_wait 300; then
+        llama_warn "等待锁超时，回滚将在无锁保护下进行"
     fi
 }
 

@@ -162,9 +162,9 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 ## 安全特性
 
 - **首次自动克隆**：`update.sh` 在 `LLAMA_CPP_SRC` 缺失/为空时自动完整克隆（`_ensure_source_repo`）；clone 失败/中断（SIGINT/SIGTERM 分信号 trap）清理半成品目录恢复"未安装"状态，trap 注册窗口即"目录内无用户数据"不变量；父目录不存在时 die（不自动创建目录树，防错误挂载点）；`git clone` 是 C3 `git -C` 契约的登记豁免（目标不存在时 `-C` 无意义，集中在 `_clone_repo` 一行）
-- **文件锁**：`flock` + 动态 FD（`exec {fd}>>`），`build.sh` 和 `update.sh` 互斥，均在参数解析**之后**获取（`--help`/`--version` 不受锁占用影响）；`update.sh` 在调用 `build.sh` 前释放锁以避免死锁，构建失败进入回滚前重新取锁（回滚修改源码树，防止与并发进程交错）
+- **文件锁**：`flock` + 动态 FD（`exec {fd}>>`），`build.sh` 和 `update.sh` 互斥，均在参数解析**之后**获取（`--help`/`--version` 不受锁占用影响）；`update.sh` 在调用 `build.sh` 前释放锁以避免死锁，构建失败进入回滚前经 `llama_acquire_lock_wait` 阻塞等待重取（回滚修改源码树，防止与仍在清理退出的 build.sh 子进程或并发进程交错；等待 300s 超时后降级为无锁回滚——安全路径必须执行）
 - **构建失败清理**：`build.sh` 通过双重 trap（SIGINT/SIGTERM 显式退出码 + EXIT）删除未完成构建目录
-- **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义；用户指定的裸 commit 按 7-40 位 hex 经 `rev-parse` 通用解析（短/完整 SHA），同名纯 hex tag 优先按 tag 处理；中断恢复与构建失败回滚执行前均须持有文件锁（`_cleanup_on_interrupt` 经 `LOCK_FD` 判断本进程持锁状态，构建成功后经 `llama_cleanup_trap` 解除中断恢复 trap，成功事务不可被信号撤销）
+- **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；纯重建（无更新事务）的构建失败按普通构建失败处理（die + exit 1）——源码从未被触碰，回滚与"更新事务失败"的退出码 2 均为语义误报；中断恢复 trap 在 `_update_source`（首个修改源码库的步骤）注册——只读阶段（前置检查/release 查询）中断即干净退出，不触发对未修改树的回滚；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义；"本地已在该版本"的 tag 名短路经 `ls-remote` 做 commit 级比对（上游重指标签时跟随更新，比对失败降级按名字判定并警告）；用户指定的裸 commit 按 7-40 位 hex 经 `rev-parse` 通用解析（短/完整 SHA），同名纯 hex tag 优先按 tag 处理；中断恢复与构建失败回滚执行前均须持有文件锁（`_cleanup_on_interrupt` 经 `LOCK_FD` 判断本进程持锁状态，构建成功后经 `llama_cleanup_trap` 解除中断恢复 trap，成功事务不可被信号撤销）
 - **磁盘空间检查**：构建前验证 ≥10GB 可用（`llama_check_disk_space`）
 - **子模块清理**：`update.sh` 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目（`ls-files --stage` 按 TAB 解析，兼容含空格路径；`core.quotePath=false` 兼容非 ASCII 路径）。三重安全契约：`git ls-files` 失败则白名单构建失败、保守不删除（进程替换吞错曾导致空白名单全删，已实证）；find 不深入当前子模块内部（嵌套子模块豁免）；gitdir 指针必须指向 `.git/modules/`（未跟踪 worktree 指向 `.git/worktrees/`，预检查放行的未跟踪内容不得删除）。清理失败经调用点 `|| true` 容忍，不阻断更新/回滚主流程
 
