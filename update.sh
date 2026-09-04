@@ -72,6 +72,24 @@ _short_sha() {
     printf '%s\n' "${1:0:7}"
 }
 
+# Usage: _remote_repo_slug <url>
+# 把 git 远程 URL 归一化为「host/owner/repo」小写形态，供 origin 比对使用。
+# https / ssh:// / scp（git@host:owner/repo）、尾随 .git 与大小写差异都是
+# 同一仓库的合法形态——裸字符串比较会把合法 SSH clone 误报为 fork
+# （每次更新都警告，稀释真正 fork 告警的信号价值）。保留 host 段：
+# 不同托管站（gitlab 等）的同名 owner/repo 仍须判为不一致。
+# 解析不出 host 的本地路径原样返回（与预期 URL 不等 → 照常警告）。
+_remote_repo_slug() {
+    local url="${1%.git}"
+    url="${url#https://}"
+    url="${url#http://}"
+    url="${url#ssh://}"
+    url="${url#git://}"
+    url="${url/:/\/}"  # scp 形态 host:owner/repo → host/owner/repo（首个冒号）
+    url="${url#git@}"
+    printf '%s\n' "${url,,}"
+}
+
 # Usage: _git_net <git-args...>
 # 带低速保护的网络 git 调用统一入口：GIT_HTTP_LOW_SPEED_* 由 git 从环境
 # 读取，半挂起（连接建立但对端不响应）时中止传输，而非无限期持锁阻塞
@@ -708,8 +726,11 @@ _check_local_repo() {
 
     local actual_remote
     actual_remote=$(git -C "$LLAMA_CPP_SRC" remote get-url origin 2>/dev/null || echo "")
-    local normalized_remote="${actual_remote%.git}"
-    local normalized_expected="${REPO_URL%.git}"
+    # 归一化后比较（_remote_repo_slug）：同一仓库的 SSH/scp/.git/大小写形态
+    # 不再误报 fork；host 段保留，异站同名仓库仍照常警告
+    local normalized_remote normalized_expected
+    normalized_remote=$(_remote_repo_slug "$actual_remote")
+    normalized_expected=$(_remote_repo_slug "$REPO_URL")
     if [[ "$normalized_remote" != "$normalized_expected" ]]; then
         llama_warn "远程 origin 与预期不一致"
         llama_detail "当前: ${actual_remote}"

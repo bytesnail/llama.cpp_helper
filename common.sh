@@ -829,6 +829,7 @@ llama_check_build_health() {
         return 1
     fi
     # 检查关键二进制文件是否存在且可执行
+    local binary
     for binary in "${REQUIRED_BINARIES[@]}"; do
         if [[ ! -x "${bin_dir}/${binary}" ]]; then
             return 1

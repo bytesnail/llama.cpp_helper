@@ -1195,3 +1195,40 @@ MOCK_EOF
     [ "$status" -eq 0 ]
     [[ "$output" =~ "克隆" ]]
 }
+
+@test "_remote_repo_slug normalizes the same repo across URL forms" {
+    # 回归：origin 比对曾按裸字符串进行——合法 SSH/scp clone 每次更新都被
+    # 误报为"远程 origin 与预期不一致（可能是 fork）"
+    _load_update
+    run _remote_repo_slug "https://github.com/GGML-Org/llama.cpp.git"
+    [ "$status" -eq 0 ]
+    [ "$output" = "github.com/ggml-org/llama.cpp" ]
+    run _remote_repo_slug "git@github.com:ggml-org/llama.cpp.git"
+    [ "$output" = "github.com/ggml-org/llama.cpp" ]
+    run _remote_repo_slug "ssh://git@github.com/ggml-org/llama.cpp"
+    [ "$output" = "github.com/ggml-org/llama.cpp" ]
+    run _remote_repo_slug "git://github.com/ggml-org/llama.cpp"
+    [ "$output" = "github.com/ggml-org/llama.cpp" ]
+}
+
+@test "_remote_repo_slug keeps host segment (foreign-host same name still differs)" {
+    _load_update
+    run _remote_repo_slug "https://gitlab.com/ggml-org/llama.cpp"
+    [ "$output" = "gitlab.com/ggml-org/llama.cpp" ]
+    [ "$output" != "$(_remote_repo_slug "${REPO_URL}")" ]
+}
+
+@test "_check_local_repo does not warn fork for SSH origin of the same repo" {
+    _load_update
+
+    LLAMA_CPP_SRC="${TEST_TMPDIR}/llama.cpp"
+    git -C "$LLAMA_CPP_SRC" remote add origin "git@github.com:ggml-org/llama.cpp.git"
+    run _check_local_repo
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"远程 origin 与预期不一致"* ]]
+
+    # 真正的 fork 仍须告警
+    git -C "$LLAMA_CPP_SRC" remote set-url origin "git@github.com:someone-else/llama.cpp.git"
+    run _check_local_repo
+    [[ "$output" =~ "远程 origin 与预期不一致" ]]
+}

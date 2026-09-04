@@ -226,6 +226,7 @@ _verify_build() {
     fi
 
     # 检查关键二进制文件
+    local binary
     for binary in "${REQUIRED_BINARIES[@]}"; do
         _verify_binary_exists "$binary" "$bin_dir" || errors=$((errors + 1))
     done
