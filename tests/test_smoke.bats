@@ -7,14 +7,14 @@ load test_helper
 }
 
 @test "all scripts pass bash -n syntax check" {
-    for script in common.sh config.sh build.sh update.sh run_env.sh; do
+    for script in common.sh config.sh build.sh update.sh run_env.sh pr_env.sh; do
         run bash -n "${BATS_TEST_DIRNAME}/../${script}"
         [ "$status" -eq 0 ]
     done
 }
 
 @test "all scripts have correct shebang line" {
-    for script in common.sh config.sh build.sh update.sh run_env.sh; do
+    for script in common.sh config.sh build.sh update.sh run_env.sh pr_env.sh; do
         local first_line
         first_line=$(head -1 "${BATS_TEST_DIRNAME}/../${script}")
         [[ "$first_line" == "#!/bin/bash" ]]

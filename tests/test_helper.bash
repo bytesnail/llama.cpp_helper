@@ -51,6 +51,7 @@ _init_git_repo() {
 _load_common() { source "${BATS_TEST_DIRNAME}/../common.sh" 2>/dev/null || true; }
 _load_build()  { _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../build.sh"; }
 _load_update() { _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../update.sh"; }
+_load_pr_env() { _LLAMA_SOURCE_ONLY=1 source "${BATS_TEST_DIRNAME}/../pr_env.sh"; }
 
 # Usage: _make_stub_exec <path> [body]
 # 创建可执行 stub 脚本（默认空 bash 脚本；body 为可选脚本体）。

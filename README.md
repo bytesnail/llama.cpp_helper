@@ -17,6 +17,7 @@
 - [脚本说明](#脚本说明)
   - [build.sh — 构建](#buildsh--构建)
   - [update.sh — 更新](#updatesh--更新)
+  - [pr_env.sh — 隔离 PR 测试环境](#pr_envsh--隔离-pr-测试环境)
   - [run_env.sh — 运行时环境](#run_envsh--运行时环境)
 - [配置](#配置)
   - [构建配置](#构建配置)
@@ -130,6 +131,7 @@ bash build.sh -i
 ├── common.sh         # 工具层：日志、锁、信号、磁盘、GPU 检测（source-only）
 ├── build.sh          # 构建入口（CMake + Ninja + OpenBLAS + CUDA）
 ├── update.sh         # 更新入口（GitHub 标签查询 → 拉取 → 构建 + 回滚）
+├── pr_env.sh         # PR 隔离构建环境（检出 PR head → 独立目录构建）
 ├── run_env.sh        # 运行时环境（source-only，设置 CUDA P2P 等变量）
 ├── Makefile          # lint / syntax / test / check
 ├── .shellcheckrc     # ShellCheck 规则豁免
@@ -142,6 +144,7 @@ bash build.sh -i
     ├── test_smoke.bats
     ├── test_build.bats
     ├── test_update.bats
+    ├── test_pr_env.bats
     └── test_run_env.bats
 ```
 
@@ -152,6 +155,8 @@ build.sh    ──source──> common.sh
             ──source──> config.sh
 update.sh   ──source──> common.sh
             ──source──> config.sh
+pr_env.sh   ──source──> common.sh
+            ──source──> config.sh（封装 build.sh，注入隔离路径）
 run_env.sh  ──source──> common.sh（仅此一项：config.sh 的 readonly 变量
                               会灌入父 shell，版本号改经子 shell 提取）
 ```
@@ -206,6 +211,30 @@ bash update.sh 1a2b3c4 # 更新到指定 commit（7-40 位 SHA）
 4. 拉取 → checkout → 清理旧子模块残留 → 同步子模块
 5. 调用 `build.sh` 构建（输出流式可见）
 6. 构建失败 → 源码已更新时自动回滚 + 回滚后重新构建（退出码 2）；纯重建失败不回滚（源码未动，退出码 1）
+
+### pr_env.sh — 隔离 PR 测试环境
+
+在独立目录中检出指定 GitHub PR 的 head 并构建，与主环境（release 版本）的源码树、build 目录和锁文件完全隔离。适用于验证尚未合并的 PR。
+
+```bash
+bash pr_env.sh create 29625     # 克隆 + 检出 PR head + 完整构建
+bash pr_env.sh update 29625     # 拉取 PR 最新 head（有变化时增量构建）
+bash pr_env.sh build 29625 -i   # 仅构建已有环境（-i 增量）
+bash pr_env.sh --help           # 查看帮助
+```
+
+默认源码目录为与 `LLAMA_CPP_SRC` 同级的 `llama.cpp-pr<PR号>`（本机默认 `/mnt/usr/tools/llama.cpp-pr29625`），可用 `--src DIR` 覆盖。
+
+**隔离机制：** 调用 `build.sh` 时自动注入 `LLAMA_CPP_SRC`、`BUILD_DIR` 和独立的 `LOCK_FILE`（`llama_cpp_helper-pr<PR号>-<UID>.lock`），因此可与主环境并存，互不覆盖源码或构建产物。
+
+> **⚠️ 不要对 PR 隔离环境运行 `update.sh`**——它按 GitHub release tag 解析目标版本，会把 PR commit 切换掉。PR 更新请用 `pr_env.sh update <PR号>`（或手动 fetch `refs/pull/<PR号>/head` 后执行 `build.sh -i`）。
+
+**行为说明：**
+
+- `create` 优先从本地 `LLAMA_CPP_SRC` 克隆（快且省流量），本地不可用时回退到上游 `REPO_URL`；目标目录已存在且非空时拒绝覆盖。
+- `update` 先检查工作区是否干净（有未提交更改则拒绝），再从上游拉取 `refs/pull/<PR号>/head`；head 未变化时直接退出，不触发重建。
+- PR head 被检出为 detached HEAD；`.build-stamp` 记录实际构建的 commit，便于追溯。
+- GitHub 通常保留已关闭/已合并 PR 的 `refs/pull/<N>/head`，但本脚本面向持续跟随 open PR 的场景。
 
 ### run_env.sh — 运行时环境
 

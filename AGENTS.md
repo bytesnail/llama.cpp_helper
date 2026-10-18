@@ -15,7 +15,7 @@
 
 ```bash
 make check          # lint + syntax + test 全部（质量门禁，提交前运行）
-make lint           # ShellCheck 静态分析（6 个脚本：common/config/build/update/run_env + test_helper.bash）
+make lint           # ShellCheck 静态分析（7 个脚本：common/config/build/update/run_env/pr_env + test_helper.bash）
 make syntax         # bash -n 语法检查
 make test           # bats-core 测试套件（数量随开发增长，`make help` 显示实时计数）
 
@@ -56,12 +56,14 @@ source run_env.sh        # 加载运行时环境变量（必须 source，直接�
 
 ```
 config.sh   (配置层，纯数据)   ─┐
-common.sh   (工具层，共享函数) ─┤  被 build.sh / update.sh 两个入口 source
+common.sh   (工具层，共享函数) ─┤  被 build.sh / update.sh / pr_env.sh 三个入口 source
                                │
 build.sh ──┐                   │
 update.sh ─┼── source ─────────┘
-run_env.sh ┘── source ── 仅 common.sh（config.sh 的 readonly 变量会灌入
-                          父 shell，版本号经子 shell 提取，见 run_env.sh 注释）
+pr_env.sh ─┘
+
+run_env.sh ── source ── 仅 common.sh（config.sh 的 readonly 变量会灌入
+                        父 shell，版本号经子 shell 提取，见 run_env.sh 注释）
 ```
 
 每个入口脚本的统一骨架：
@@ -72,7 +74,7 @@ _main_rc=$?
 llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下文用 exit
 ```
 
-入口脚本通过 `_LLAMA_SOURCE_ONLY=1` 支持**测试提取模式**：测试 source 入口脚本时跳过锁获取、trap 注册、`set -euo pipefail` 等副作用，仅加载函数定义供测试调用（`build.sh` 和 `update.sh` 使用）。
+入口脚本通过 `_LLAMA_SOURCE_ONLY=1` 支持**测试提取模式**：测试 source 入口脚本时跳过锁获取、trap 注册、`set -euo pipefail` 等副作用，仅加载函数定义供测试调用（`build.sh`、`update.sh` 和 `pr_env.sh` 使用）。
 
 ## 模块分层
 
@@ -80,7 +82,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 |----|------|------|
 | 配置层 | `config.sh` | 纯数据：路径、构建常量、构建旋钮表（`LLAMA_CMAKE_KNOBS`）、版本号。用 `${VAR:-default}` 允许环境覆盖 |
 | 工具层 | `common.sh` | 所有共享函数：日志、锁、信号、磁盘、GPU 检测、**硬件信息采集**（CPU 拓扑/指令集/内存/GPU/NVLink）、conda 激活、网络、Git 辅助、构建健康检查、文件大小、颜色管理、退出辅助 |
-| 入口层 | `build.sh`, `update.sh`, `run_env.sh` | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾 |
+| 入口层 | `build.sh`, `update.sh`, `pr_env.sh`, `run_env.sh` | 各自独立的业务逻辑，均以 `main "$@"` 开头，`llama_return_or_exit` 结尾（`run_env.sh` 例外：source-only） |
 | 测试层 | `tests/` | 每个源文件对应一个 `test_*.bats`，另有 `test_smoke.bats` 覆盖基础设施检查 |
 
 ## 何处查找
@@ -89,6 +91,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 |------|------|------|
 | 修改构建逻辑 | `build.sh` → `main()` | main() 包含参数解析和全部构建逻辑 |
 | 修改更新逻辑 | `update.sh` → `_ensure_source_repo()` / `_resolve_target()` / `_update_source()` / `_build_with_rollback()` | 首装克隆 → 决策 → 切换 → 构建 → 回滚链路 |
+| 修改 PR 隔离环境 | `pr_env.sh` → `_cmd_create()` / `_cmd_update()` / `_cmd_build()` / `_run_build()` | fetch `refs/pull/<N>/head` → detached checkout → 注入隔离路径调用 `build.sh` |
 | 添加新工具函数 | `common.sh` | 遵循 `llama_` 公开 / `_` 私有两级命名 |
 | 修改配置默认值 | `config.sh` | 所有变量用 `${VAR:-default}` 模式 |
 | 添加/删除构建旋钮 | `config.sh` → `LLAMA_CMAKE_KNOBS` | 定义变量 + 登记旋钮表；`build.sh` 循环生成 `-D`，无需改动 |
@@ -114,7 +117,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 其他跨模块变量例外：
 - `incremental`、`_CLEANUP_DONE`、`_BUILD_TOUCHED` 和 `_BUILD_COMMITTED`：`build.sh` 中的 script-level 可变状态，供 trap handler 访问。其中 `_BUILD_COMMITTED` 在构建成功后置位，使 `_cleanup_on_exit` 的删除条件结构性短路（不依赖 EXIT trap 上 `$?==0` 这一非保证），保护已提交构建不被信号路径误删。
-- `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh` 和 `update.sh` 读取以跳过副作用。
+- `_LLAMA_SOURCE_ONLY`：由测试设置，供 `build.sh`、`update.sh` 和 `pr_env.sh` 读取以跳过副作用。
 - `_LLAMA_RUN_SILENT_TMP`：`llama_run_silent` 登记当前捕获临时文件的路径，`llama_safe_exit` 统一退出漏斗据此清理——信号路径（trap → `llama_safe_exit` → exit）不会执行 `llama_run_silent` 自身的 `rm -f`，缺该登记会把整份构建日志遗留在 `$TMPDIR`。
 - `update.sh` 的更新会话状态 7 个脚本级全局（`current_commit`、`current_tag`、`current_branch`、`release_tag`、`release_date`、`need_source_update`、`skip_update`）：写入面已收敛为 3 个具名入口——`_session_capture_current`（从 git 捕获更新前状态）、`_session_set_target`（记录目标版本）、`_resolve_target`（更新决策，两态显式写保证可重入）；跨函数读取的性质不变，故仍用 `lowercase_snake_case` 脚本级变量。短 SHA 由 `_short_sha` 现算（derive-don't-store，原 `current_short`/`release_short` 已消除），其余函数间数据经参数/返回值传递（`target_version` 是 `main` 局部，经 `_parse_args` out-param 与 `_resolve_target` 参数传递；release 查询经 `_fetch_latest_release` seam 返回 TAB 行）。写入面不变量由 `tests/test_smoke.bats` 三个契约测试钉住（顶格赋值清单、已消除名字消失、函数体外无会话全局赋值）。
 
@@ -133,7 +136,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 
 ## 错误处理模式
 
-- **严格模式**：直接执行脚本（`build.sh`, `update.sh`）必须 `set -euo pipefail`
+- **严格模式**：直接执行脚本（`build.sh`, `update.sh`, `pr_env.sh`）必须 `set -euo pipefail`
 - **source 脚本**：`common.sh` 条件启用严格模式；`run_env.sh` 不启用（防止杀死父 shell）
 - **防重复 source**：`_LLAMA_*_SOURCED` 守卫，二次 source 时 `return 0`
 - **防直接执行**：`run_env.sh`、`config.sh` 检测 `BASH_SOURCE[0] == $0` 并报错
@@ -166,6 +169,7 @@ llama_return_or_exit "$_main_rc"   # source 上下文用 return，脚本上下�
 - **构建失败清理**：`build.sh` 通过双重 trap（SIGINT/SIGTERM 显式退出码 + EXIT）删除未完成构建目录
 - **更新失败回滚**：`update.sh` 自动回滚到更新前 commit + 重新构建；回滚失败时不再继续重建（防止谎报"已回滚"），输出详细恢复步骤后中止；纯重建（无更新事务）的构建失败按普通构建失败处理（die + exit 1）——源码从未被触碰，回滚与"更新事务失败"的退出码 2 均为语义误报；中断恢复 trap 在 `_update_source`（首个修改源码库的步骤）注册——只读阶段（前置检查/release 查询）中断即干净退出，不触发对未修改树的回滚；版本切换先解析 `refs/tags/<tag>` 到 SHA 再 checkout，避免分支/tag 同名歧义；"本地已在该版本"的 tag 名短路经 `ls-remote` 做 commit 级比对（上游重指标签时跟随更新，比对失败降级按名字判定并警告）；用户指定的裸 commit 按 7-40 位 hex 经 `rev-parse` 通用解析（短/完整 SHA），同名纯 hex tag 优先按 tag 处理；中断恢复与构建失败回滚执行前均须持有文件锁（`_cleanup_on_interrupt` 经 `LOCK_FD` 判断本进程持锁状态，构建成功后经 `llama_cleanup_trap` 解除中断恢复 trap，成功事务不可被信号撤销）
 - **磁盘空间检查**：构建前验证 ≥10GB 可用（`llama_check_disk_space`）
+- **PR 隔离环境**：`pr_env.sh` 在独立目录检出 PR head 并构建，向 `build.sh` 注入 `LLAMA_CPP_SRC` / `BUILD_DIR` / 独立 `LOCK_FILE`。版本更新**不走 `update.sh`**（release tag 语义会把 PR commit 切走），应使用 `pr_env.sh update <PR号>` 或手动 fetch `refs/pull/<N>/head` 后 `build.sh -i`；PR head 以 detached HEAD 检出，`.build-stamp` 记录实际构建 commit
 - **子模块清理**：`update.sh` 自动清理旧版本遗留的子模块目录和 `.git/modules/` 条目（`ls-files --stage` 按 TAB 解析，兼容含空格路径；`core.quotePath=false` 兼容非 ASCII 路径）。三重安全契约：`git ls-files` 失败则白名单构建失败、保守不删除（进程替换吞错曾导致空白名单全删，已实证）；find 不深入当前子模块内部（嵌套子模块豁免）；gitdir 指针必须指向 `.git/modules/`（未跟踪 worktree 指向 `.git/worktrees/`，预检查放行的未跟踪内容不得删除）。清理失败经调用点 `|| true` 容忍，不阻断更新/回滚主流程
 
 ## 注意事项

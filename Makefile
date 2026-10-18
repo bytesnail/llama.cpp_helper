@@ -4,7 +4,7 @@
 SHELLCHECK  := $(shell command -v shellcheck 2>/dev/null || echo shellcheck)
 BATS        := $(shell command -v bats 2>/dev/null || echo bats)
 
-SHELL_SCRIPTS := common.sh config.sh build.sh update.sh run_env.sh tests/test_helper.bash
+SHELL_SCRIPTS := common.sh config.sh build.sh update.sh run_env.sh pr_env.sh tests/test_helper.bash
 TEST_COUNT   := $(shell grep -c '@test' tests/*.bats 2>/dev/null | awk -F: '{s+=$$NF} END{print s+0}')
 
 # 运行依赖工具的目标前先验证工具可用性
@@ -34,7 +34,7 @@ all: check
 
 help:
 	@echo "可用目标:"
-	@echo "  lint     - ShellCheck 静态分析（6 个脚本）"
+	@echo "  lint     - ShellCheck 静态分析（7 个脚本）"
 	@echo "  syntax   - bash -n 语法检查"
 	@echo "  test     - bats-core 测试套件（$(TEST_COUNT) 项）"
 	@echo "  check    - lint + syntax + test 全部"
