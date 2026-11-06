@@ -138,3 +138,114 @@ load test_helper
     _pin_host_toolchain
     [[ "$COMPILER_PATH" == "${LLAMA_HOST_TOOLCHAIN_BIN}:/opt/custom-tools" ]]
 }
+
+# --- UI 资产缓存 ------------------------------------------------
+# 契约：provisioning 成功（.ui-stamp 存在）后把 build/tools/ui 三项产物
+# 快照进 LLAMA_UI_ASSET_CACHE_DIR/<HEAD>/；全量清理后预放置回去，使
+# provisioning 走 stamp 匹配的离线快路径。
+
+@test "_ui_asset_cache_save snapshots stamped tools/ui keyed by HEAD" {
+    _load_build
+    export LLAMA_UI_ASSET_CACHE_DIR="${TEST_TMPDIR}/ui-cache"
+    local head
+    head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    mkdir -p "${BUILD_DIR}/tools/ui/dist"
+    echo "fake-archive" > "${BUILD_DIR}/tools/ui/dist.tar.gz"
+    printf 'ggml-org/llama-ui|b0000' > "${BUILD_DIR}/tools/ui/.ui-stamp"
+    echo '<html>' > "${BUILD_DIR}/tools/ui/dist/index.html"
+
+    _ui_asset_cache_save
+    [[ -f "${LLAMA_UI_ASSET_CACHE_DIR}/${head}/dist.tar.gz" ]]
+    [[ -f "${LLAMA_UI_ASSET_CACHE_DIR}/${head}/.ui-stamp" ]]
+    [[ -f "${LLAMA_UI_ASSET_CACHE_DIR}/${head}/dist/index.html" ]]
+}
+
+@test "_ui_asset_cache_save skips when provisioning stamp missing" {
+    _load_build
+    export LLAMA_UI_ASSET_CACHE_DIR="${TEST_TMPDIR}/ui-cache"
+    local head
+    head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    mkdir -p "${BUILD_DIR}/tools/ui"
+    echo "partial" > "${BUILD_DIR}/tools/ui/dist.tar.gz"
+
+    _ui_asset_cache_save
+    [[ ! -e "${LLAMA_UI_ASSET_CACHE_DIR}/${head}" ]]
+}
+
+@test "_ui_asset_cache_restore pre-places cached snapshot into build tree" {
+    _load_build
+    export LLAMA_UI_ASSET_CACHE_DIR="${TEST_TMPDIR}/ui-cache"
+    local head
+    head=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD)
+    local cached="${LLAMA_UI_ASSET_CACHE_DIR}/${head}"
+    mkdir -p "${cached}/dist"
+    echo "fake-archive" > "${cached}/dist.tar.gz"
+    printf 'ggml-org/llama-ui|b0000' > "${cached}/.ui-stamp"
+    echo '<html>' > "${cached}/dist/index.html"
+
+    run _ui_asset_cache_restore
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "缓存命中" ]]
+    [[ -f "${BUILD_DIR}/tools/ui/dist.tar.gz" ]]
+    [[ -f "${BUILD_DIR}/tools/ui/.ui-stamp" ]]
+    [[ -f "${BUILD_DIR}/tools/ui/dist/index.html" ]]
+}
+
+@test "_ui_asset_cache_restore is a no-op on cache miss" {
+    _load_build
+    export LLAMA_UI_ASSET_CACHE_DIR="${TEST_TMPDIR}/ui-cache"
+
+    run _ui_asset_cache_restore
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"缓存命中"* ]]
+    # 未命中不得产生副作用（不创建 build/tools/ui）
+    [[ ! -e "${BUILD_DIR}/tools/ui" ]]
+}
+
+@test "UI asset cache round-trip survives build dir wipe" {
+    _load_build
+    export LLAMA_UI_ASSET_CACHE_DIR="${TEST_TMPDIR}/ui-cache"
+    mkdir -p "${BUILD_DIR}/tools/ui/dist"
+    echo "fake-archive" > "${BUILD_DIR}/tools/ui/dist.tar.gz"
+    printf 'ggml-org/llama-ui|b0000' > "${BUILD_DIR}/tools/ui/.ui-stamp"
+    echo '<html>' > "${BUILD_DIR}/tools/ui/dist/index.html"
+
+    _ui_asset_cache_save
+    rm -rf "${BUILD_DIR}"
+    _ui_asset_cache_restore
+
+    [[ -f "${BUILD_DIR}/tools/ui/dist.tar.gz" ]]
+    [[ -f "${BUILD_DIR}/tools/ui/.ui-stamp" ]]
+    [[ -f "${BUILD_DIR}/tools/ui/dist/index.html" ]]
+}
+
+@test "_warn_ui_not_embedded warns when UI build system exists but stamp missing" {
+    _load_build
+    mkdir -p "${LLAMA_CPP_SRC}/tools/ui" "${BUILD_DIR}/tools/ui"
+    touch "${LLAMA_CPP_SRC}/tools/ui/CMakeLists.txt"
+
+    run _warn_ui_not_embedded
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Web UI 未嵌入" ]]
+}
+
+@test "_warn_ui_not_embedded silent when stamp present or UI system absent" {
+    _load_build
+    mkdir -p "${LLAMA_CPP_SRC}/tools/ui" "${BUILD_DIR}/tools/ui"
+    touch "${LLAMA_CPP_SRC}/tools/ui/CMakeLists.txt" "${BUILD_DIR}/tools/ui/.ui-stamp"
+
+    run _warn_ui_not_embedded
+    [ "$status" -eq 0 ]
+    [[ -z "$output" ]]
+
+    rm -rf "${LLAMA_CPP_SRC}/tools/ui"
+    run _warn_ui_not_embedded
+    [ "$status" -eq 0 ]
+    [[ -z "$output" ]]
+}
+
+@test "config.sh derives default UI cache dir next to the source repo" {
+    unset LLAMA_UI_ASSET_CACHE_DIR
+    _load_build
+    [[ "$LLAMA_UI_ASSET_CACHE_DIR" == "${LLAMA_CPP_SRC%/*}/.llama-helper-cache/ui-assets" ]]
+}

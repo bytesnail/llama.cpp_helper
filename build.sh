@@ -265,6 +265,74 @@ _pin_host_toolchain() {
     llama_detail "host 工具链查找路径 (COMPILER_PATH): ${COMPILER_PATH}"
 }
 
+# --- UI 资产缓存 ----------------------------------------------
+# 背景：llama.cpp 构建期的 "Provisioning UI assets"（tools/ui 的 custom
+# target，每次构建重跑）从 HF 下载 dist.tar.gz 嵌入 llama-server 的 Web
+# UI；us.aws.cdn.hf.co（xet CDN）直连劣化是链路常态，3.1MB 单流下载必
+# 超时 → llama-server 静默缺失内嵌 UI。缓存按源码 HEAD 键控快照
+# provisioning 的三项产物，全量清理后预放置回去——provisioning 读到匹配
+# 的 .ui-stamp 即完全跳过网络（ui-assets.cmake 的 stamp_ok 快路径）。
+# 路径契约是 llama.cpp v0.9.0 的实现细节，上游变更时 save/restore 对缺
+# 失文件静默跳过（无操作），不影响构建本身。
+
+# Usage: _ui_asset_cache_save
+# 构建成功后调用（步骤 4）：stamp 存在（provisioning 成功过）才快照。
+# 恒返回 0——缓存失败绝不阻断构建。
+_ui_asset_cache_save() {
+    local key
+    key=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || true)
+    [[ -n "$key" ]] || return 0
+    local ui_dir="${BUILD_DIR}/tools/ui"
+    [[ -f "${ui_dir}/.ui-stamp" ]] || return 0
+    local cache_dir="${LLAMA_UI_ASSET_CACHE_DIR}/${key}"
+    if ! mkdir -p "$cache_dir" 2>/dev/null; then
+        llama_warn "UI 资产缓存目录不可创建，跳过缓存"
+        return 0
+    fi
+    local item
+    for item in dist.tar.gz .ui-stamp dist; do
+        [[ -e "${ui_dir}/${item}" ]] || continue
+        cp -a "${ui_dir}/${item}" "$cache_dir/" 2>/dev/null || true
+    done
+    llama_detail "UI 资产已快照到持久缓存 (${key:0:7})"
+}
+
+# Usage: _ui_asset_cache_restore
+# 编译步骤前调用（CMake 配置之后）：缓存命中时把三项产物预放置回
+# build/tools/ui。恒返回 0——未命中/复制失败均为无操作，provisioning
+# 退回正常网络路径。
+_ui_asset_cache_restore() {
+    local key
+    key=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || true)
+    [[ -n "$key" ]] || return 0
+    local cache_dir="${LLAMA_UI_ASSET_CACHE_DIR}/${key}"
+    # 以 stamp 为命中判据：只放 archive 不放 stamp 的部分快照不预放置
+    #（stamp 缺失时 provisioning 仍需网络拉 .sha256 校验，半恢复无意义）
+    [[ -f "${cache_dir}/.ui-stamp" ]] || return 0
+    local ui_dir="${BUILD_DIR}/tools/ui"
+    if ! mkdir -p "$ui_dir" 2>/dev/null; then
+        return 0
+    fi
+    local item
+    for item in dist.tar.gz .ui-stamp dist; do
+        [[ -e "${cache_dir}/${item}" ]] || continue
+        cp -a "${cache_dir}/${item}" "${ui_dir}/" 2>/dev/null || true
+    done
+    llama_detail "UI 资产缓存命中 (${key:0:7})，provisioning 将跳过 HF 下载"
+}
+
+# Usage: _warn_ui_not_embedded
+# 验证阶段调用：源码带 UI 构建系统但产物缺 stamp（provisioning 未成功）
+# 时告警——llama-server 可用但浏览器 Web UI 缺失，属"成功但有缺口"的
+# 静默降级，须显式可见。注：LLAMA_BUILD_UI=ON 的 npm 构建路径不写
+# .ui-stamp 会误报，本项目旋钮表未启用该路径（见 config.sh）。
+_warn_ui_not_embedded() {
+    [[ -f "${LLAMA_CPP_SRC}/tools/ui/CMakeLists.txt" ]] || return 0
+    if [[ ! -f "${BUILD_DIR}/tools/ui/.ui-stamp" ]]; then
+        llama_warn "Web UI 未嵌入 llama-server（UI 资产下载未成功；API 调用不受影响）"
+    fi
+}
+
 # --- 主逻辑 --------------------------------------------------
 main() {
 incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
@@ -412,6 +480,10 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
 
     llama_ok "CMake 配置完成"
 
+    # UI 资产缓存恢复：在编译（provisioning 随 ninja 重跑）之前预放置，
+    # 使 stamp 匹配时完全离线；未命中为无操作
+    _ui_asset_cache_restore
+
     # --- 步骤 3：编译 --------------------------------------------
     llama_step "步骤 3/4：编译（${jobs} 核并行）"
 
@@ -445,6 +517,10 @@ incremental=0  # 脚本级变量：trap handler 无法访问 main() 局部变量
     else
         llama_warn "无法读取源码 commit，跳过构建标记"
     fi
+    # UI 嵌入检查（非致命告警）+ 缓存快照：provisioning 成功则留档，
+    # 供下次全量清理后离线恢复（两者均恒返回 0，不影响本构建的成败判定）
+    _warn_ui_not_embedded
+    _ui_asset_cache_save
     # 构建已验证通过且 stamp 写入——事务已提交。双保险防止摘要打印期间
     # SIGINT/SIGTERM 撤销已提交事务（与 update.sh "成功事务不可被信号撤销"对齐）：
     #   - _BUILD_COMMITTED=1：使 _cleanup_on_exit 的删除条件结构性短路，不依赖

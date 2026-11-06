@@ -30,6 +30,16 @@ BUILD_DIR="${BUILD_DIR:-${LLAMA_CPP_SRC}/build}"
 BUILD_BIN_DIR="${BUILD_BIN_DIR:-${BUILD_DIR}/bin}"
 BUILD_STAMP="${BUILD_STAMP:-${BUILD_DIR}/.build-stamp}"
 
+# UI 资产缓存目录：build.sh 按源码 HEAD 键控快照 build/tools/ui 的
+# provisioning 产物（dist.tar.gz / .ui-stamp / dist 解压树），全量清理后
+# 预放置回去——llama.cpp 的 UI provisioning 读到匹配 stamp 即完全跳过 HF
+# 下载。动机：us.aws.cdn.hf.co（xet CDN）直连劣化是链路常态（见
+# system-config docs/network/hfd-aria2c-process-rule-rootcause.md），3.1MB
+# 的 dist.tar.gz 单流下载必超时，llama-server 会静默缺失内嵌 Web UI。
+# 默认放在源码仓库的同级目录（不随 update.sh 清理 build 目录而丢失，
+# 生产/PR 环境共用一份、按各自 HEAD 天然隔离）
+LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${LLAMA_CPP_SRC%/*}/.llama-helper-cache/ui-assets}"
+
 # --- 仓库信息 ------------------------------------------------
 REPO="ggml-org/llama.cpp"
 readonly REPO
@@ -97,5 +107,5 @@ GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-15}"      # 秒
 declare -ar REQUIRED_BINARIES=("llama-cli" "llama-server")
 
 # --- 版本号 ---------------------------------------------------
-LLAMA_HELPER_VERSION="1.1.0"
+LLAMA_HELPER_VERSION="1.2.0"
 readonly LLAMA_HELPER_VERSION
