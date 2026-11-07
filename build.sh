@@ -278,22 +278,38 @@ _pin_host_toolchain() {
 # Usage: _ui_asset_cache_save
 # 构建成功后调用（步骤 4）：stamp 存在（provisioning 成功过）才快照。
 # 恒返回 0——缓存失败绝不阻断构建。
+# 完整性双判据与上游 stamp 快路径一致（stamp + dist/index.html）：半份快照
+# 被恢复后，provisioning 会以"完整"假象跳过下载并静默嵌入缺资产（cp 中途
+# 失败曾被 || true 吞掉、坏快照照样入缓存）。先写临时目录、cp 成功后原子
+# 换名：并发 save（生产/PR 各持独立锁可并发）只会整份互相覆盖，不会留半份。
 _ui_asset_cache_save() {
     local key
     key=$(git -C "$LLAMA_CPP_SRC" rev-parse HEAD 2>/dev/null || true)
     [[ -n "$key" ]] || return 0
     local ui_dir="${BUILD_DIR}/tools/ui"
-    [[ -f "${ui_dir}/.ui-stamp" ]] || return 0
+    [[ -f "${ui_dir}/.ui-stamp" && -f "${ui_dir}/dist/index.html" ]] || return 0
     local cache_dir="${LLAMA_UI_ASSET_CACHE_DIR}/${key}"
-    if ! mkdir -p "$cache_dir" 2>/dev/null; then
+    local tmp_dir="${cache_dir}.tmp.$$"
+    if ! mkdir -p "$tmp_dir" 2>/dev/null; then
         llama_warn "UI 资产缓存目录不可创建，跳过缓存"
         return 0
     fi
-    local item
+    local item copy_failed=0
     for item in dist.tar.gz .ui-stamp dist; do
         [[ -e "${ui_dir}/${item}" ]] || continue
-        cp -a "${ui_dir}/${item}" "$cache_dir/" 2>/dev/null || true
+        cp -a "${ui_dir}/${item}" "$tmp_dir/" 2>/dev/null || copy_failed=1
     done
+    if [[ "$copy_failed" -ne 0 ]]; then
+        rm -rf -- "$tmp_dir" 2>/dev/null || true
+        llama_warn "UI 资产快照复制失败，已丢弃本次缓存（不影响构建）"
+        return 0
+    fi
+    rm -rf -- "$cache_dir" 2>/dev/null || true
+    if ! mv -- "$tmp_dir" "$cache_dir" 2>/dev/null; then
+        rm -rf -- "$tmp_dir" 2>/dev/null || true
+        llama_warn "UI 资产快照换名失败，已丢弃本次缓存（不影响构建）"
+        return 0
+    fi
     llama_detail "UI 资产已快照到持久缓存 (${key:0:7})"
 }
 
@@ -324,11 +340,13 @@ _ui_asset_cache_restore() {
 # Usage: _warn_ui_not_embedded
 # 验证阶段调用：源码带 UI 构建系统但产物缺 stamp（provisioning 未成功）
 # 时告警——llama-server 可用但浏览器 Web UI 缺失，属"成功但有缺口"的
-# 静默降级，须显式可见。注：LLAMA_BUILD_UI=ON 的 npm 构建路径不写
-# .ui-stamp 会误报，本项目旋钮表未启用该路径（见 config.sh）。
+# 静默降级，须显式可见。注：上游 Priority 1（源码树预构建 tools/ui/dist，
+# 不写 .ui-stamp）同样已嵌入 UI，据此豁免；Priority 2 的 npm 路径
+# （LLAMA_BUILD_UI=ON）不写 stamp 且产物在构建目录——本项目旋钮表未
+# 启用该路径（见 config.sh），如启用会误报。
 _warn_ui_not_embedded() {
     [[ -f "${LLAMA_CPP_SRC}/tools/ui/CMakeLists.txt" ]] || return 0
-    if [[ ! -f "${BUILD_DIR}/tools/ui/.ui-stamp" ]]; then
+    if [[ ! -f "${BUILD_DIR}/tools/ui/.ui-stamp" && ! -f "${LLAMA_CPP_SRC}/tools/ui/dist/index.html" ]]; then
         llama_warn "Web UI 未嵌入 llama-server（UI 资产下载未成功；API 调用不受影响）"
     fi
 }

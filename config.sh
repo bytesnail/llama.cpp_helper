@@ -37,8 +37,12 @@ BUILD_STAMP="${BUILD_STAMP:-${BUILD_DIR}/.build-stamp}"
 # system-config docs/network/hfd-aria2c-process-rule-rootcause.md），3.1MB
 # 的 dist.tar.gz 单流下载必超时，llama-server 会静默缺失内嵌 Web UI。
 # 默认放在源码仓库的同级目录（不随 update.sh 清理 build 目录而丢失，
-# 生产/PR 环境共用一份、按各自 HEAD 天然隔离）
-LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${LLAMA_CPP_SRC%/*}/.llama-helper-cache/ui-assets}"
+# 生产/PR 环境共用一份、按各自 HEAD 天然隔离）。
+# 先剥尾随斜杠再取父目录：`${VAR%/*}` 对 "/a/b/" 会得到 "/a/b"（缓存目录
+# 落进源码仓库内部，成为仓库里的未跟踪目录）。
+_llama_ui_cache_src="${LLAMA_CPP_SRC%/}"
+LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${_llama_ui_cache_src%/*}/.llama-helper-cache/ui-assets}"
+unset _llama_ui_cache_src
 
 # --- 仓库信息 ------------------------------------------------
 REPO="ggml-org/llama.cpp"
