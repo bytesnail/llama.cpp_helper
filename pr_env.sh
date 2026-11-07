@@ -165,7 +165,9 @@ _require_repo() {
         llama_detail "请先执行: bash $(basename "$0") create ${pr_number}"
         return 1
     fi
-    if [[ ! -d "${pr_src}/.git" ]]; then
+    # rev-parse 而非 [[ -d .git ]]：git worktree 检出的 .git 是文件而非目录，
+    # 目录判据会把合法仓库误报为"不是 Git 仓库"
+    if ! git -C "$pr_src" rev-parse --git-dir >/dev/null 2>&1; then
         llama_err "源码目录不是 Git 仓库: ${pr_src}"
         return 1
     fi
@@ -190,6 +192,18 @@ _require_clean_worktree() {
 }
 
 # --- Git 操作 ------------------------------------------------
+# Usage: _pr_git_net <git-args...>
+# 带低速保护的网络 git 调用（与 update.sh 的 _git_net 同一对 config.sh
+# 常量；形制用 -c 配置而非 env——本脚本调用点已按 -C 目标自由组合）：
+# 对端半挂起（连接建立但不响应）时中止传输。clone 是数百 MB 的首次大
+# 下载，半挂起不加保护会无限期挂起前台终端。
+_pr_git_net() {
+    git \
+        -c http.lowSpeedLimit="${GIT_HTTP_LOW_SPEED_LIMIT}" \
+        -c http.lowSpeedTime="${GIT_HTTP_LOW_SPEED_TIME}" \
+        "$@"
+}
+
 # Usage: _fetch_pr_head
 # 直接从规范上游拉取 PR head 到本地分支 pr-<N>（不依赖 origin 配置），
 # 并以 + 强制更新该本地分支以跟随 PR 的新提交。
@@ -198,9 +212,7 @@ _fetch_pr_head() {
     branch=$(_pr_branch "$pr_number")
     llama_info "拉取 PR #${pr_number} head（refs/pull/${pr_number}/head）..."
     local fetch_rc=0
-    git -C "$pr_src" \
-        -c http.lowSpeedLimit="${GIT_HTTP_LOW_SPEED_LIMIT}" \
-        -c http.lowSpeedTime="${GIT_HTTP_LOW_SPEED_TIME}" \
+    _pr_git_net -C "$pr_src" \
         fetch "$REPO_URL" "+refs/pull/${pr_number}/head:refs/heads/${branch}" || fetch_rc=$?
     if [[ "$fetch_rc" -ne 0 ]]; then
         llama_err "拉取 PR head 失败 (退出码: ${fetch_rc})"
@@ -277,7 +289,8 @@ _cmd_create() {
 
     local seed="${LLAMA_CPP_SRC:-}"
     local clone_url="$REPO_URL"
-    if [[ -n "$seed" ]] && [[ -d "${seed}/.git" ]]; then
+    # rev-parse 而非 [[ -d .git ]]：种子为 worktree 检出时 .git 是文件
+    if [[ -n "$seed" ]] && git -C "$seed" rev-parse --git-dir >/dev/null 2>&1; then
         clone_url="$seed"
         llama_info "从本地仓库克隆（种子: ${seed}）"
     else
@@ -285,7 +298,7 @@ _cmd_create() {
     fi
 
     local clone_rc=0
-    git clone "$clone_url" "$pr_src" || clone_rc=$?
+    _pr_git_net clone -- "$clone_url" "$pr_src" || clone_rc=$?
     if [[ "$clone_rc" -ne 0 ]]; then
         llama_err "克隆失败 (退出码: ${clone_rc})"
         return 1
@@ -298,17 +311,34 @@ _cmd_create() {
         return 1
     fi
 
-    _fetch_pr_head || return $?
+    # 克隆成功后的 git 阶段失败：目录保留（源码树完整，可直接续建），
+    # 指引续建/重来两条路——否则 re-run create 会因目录非空被拒且无出路
+    if ! _fetch_pr_head; then
+        _create_resume_hint
+        return 1
+    fi
     local sha
     sha=$(_resolve_pr_sha) || {
         llama_err "无法解析 PR head commit"
+        _create_resume_hint
         return 1
     }
     llama_info "检出 PR head: ${sha}"
-    _checkout_pr_sha "$sha" || return $?
+    if ! _checkout_pr_sha "$sha"; then
+        _create_resume_hint
+        return 1
+    fi
 
     _run_build 0 || return $?
     return 0
+}
+
+# Usage: _create_resume_hint
+# create 在克隆成功后失败时打印续建指引：保留的目录经 update 即可完成
+# fetch + checkout + 构建，无需整份重新克隆。
+_create_resume_hint() {
+    llama_detail "隔离环境目录已保留: ${pr_src}"
+    llama_detail "续建: bash $(basename "$0") update ${pr_number}；或删除该目录后重新 create"
 }
 
 # Usage: _cmd_update
@@ -349,6 +379,28 @@ _cmd_build() {
     return 0
 }
 
+# Usage: _require_distinct_from_main_env
+# 防误指主环境：--src 指向主源码树（LLAMA_CPP_SRC）时，update/build 会把
+# 主环境源码切到 PR head 且绕过主环境锁（本脚本注入的是 PR 独立锁文件），
+# 并发 update.sh 会与 PR 构建交错修改同一棵树。realpath 归一化（-m 允许
+# 目标尚不存在）后再比较，尾随斜杠/相对路径/symlink 不绕过；realpath
+# 缺失时降级为字符串比较（保守：仅拦截字面相同）。
+_require_distinct_from_main_env() {
+    local main_src="${LLAMA_CPP_SRC:-}"
+    [[ -n "$main_src" ]] || return 0
+    local pr_real="$pr_src" main_real="$main_src"
+    if command -v realpath >/dev/null 2>&1; then
+        pr_real=$(realpath -m -- "$pr_src" 2>/dev/null) || pr_real="$pr_src"
+        main_real=$(realpath -m -- "$main_src" 2>/dev/null) || main_real="$main_src"
+    fi
+    if [[ "$pr_real" == "$main_real" ]]; then
+        llama_err "--src 不能指向主源码树 (LLAMA_CPP_SRC): ${pr_src}"
+        llama_detail "PR 隔离环境须使用独立目录（默认: $(_default_pr_src "$pr_number")）"
+        return 1
+    fi
+    return 0
+}
+
 # --- 主逻辑 --------------------------------------------------
 main() {
     local parse_rc=0
@@ -362,6 +414,7 @@ main() {
     if [[ -z "$pr_src" ]]; then
         pr_src=$(_default_pr_src "$pr_number")
     fi
+    _require_distinct_from_main_env || llama_safe_exit 1
 
     local rc=0
     case "$pr_command" in

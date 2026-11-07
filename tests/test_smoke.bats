@@ -92,7 +92,7 @@ load test_helper
     # ≥2=grep 自身错误（文件缺失/无 PCRE）——此前 `&& exit 1 || true`
     # 把 rc≥2 吞掉，测试在什么都没检查的情况下空转常绿（已实证风险）
     run bash -c "
-        for s in common.sh config.sh build.sh update.sh run_env.sh; do
+        for s in common.sh config.sh build.sh update.sh run_env.sh pr_env.sh; do
             out=\$(grep -nP '^\t' '${BATS_TEST_DIRNAME}/../'\$s 2>&1)
             rc=\$?
             if [ \"\$rc\" -eq 0 ]; then echo \"tab indentation in \$s: \$out\"; exit 1; fi
@@ -252,6 +252,15 @@ load test_helper
     "
     [ "$status" -eq 0 ]
     [[ "$output" == *"UPDATE_DOUBLE_OK"* ]]
+    [[ "$output" != *"只读变量"* ]]
+    [[ "$output" != *"readonly variable"* ]]
+    run bash -c "
+        _LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../pr_env.sh'
+        _LLAMA_SOURCE_ONLY=1 source '${BATS_TEST_DIRNAME}/../pr_env.sh'
+        echo PR_ENV_DOUBLE_OK
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PR_ENV_DOUBLE_OK"* ]]
     [[ "$output" != *"只读变量"* ]]
     [[ "$output" != *"readonly variable"* ]]
 }
