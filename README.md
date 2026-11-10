@@ -287,7 +287,7 @@ source run_env.sh --status  # 查看硬件信息 + 环境变量 + GPU 运行时�
 | `REPO` | `ggml-org/llama.cpp` | GitHub 仓库标识（update.sh 查询） |
 | `REPO_URL` | `https://github.com/ggml-org/llama.cpp` | GitHub 仓库 URL（update.sh remote 验证） |
 | `BUILD_DIR` / `BUILD_BIN_DIR` / `BUILD_STAMP` | `${LLAMA_CPP_SRC}/build` 及其子路径 | 构建产物布局（写方 build.sh 与读方 common.sh/update.sh 的共享协议） |
-| `LLAMA_UI_ASSET_CACHE_DIR` | `${LLAMA_CPP_SRC}` 同级 `.llama-helper-cache/ui-assets` | UI 资产持久缓存：build.sh 按源码 HEAD 快照/恢复 provisioning 产物（dist.tar.gz / .ui-stamp / dist），全量清理后离线恢复，规避 HF 下载超时。可用环境变量覆盖；生产/PR 环境共用、按 HEAD 天然隔离 |
+| `LLAMA_UI_ASSET_CACHE_DIR` | `${LLAMA_CPP_SRC}` 同级 `.cache/llama_cpp_helper/ui-assets` | UI 资产持久缓存：build.sh 按源码 HEAD 快照/恢复 provisioning 产物（dist.tar.gz / .ui-stamp / dist），全量清理后离线恢复，规避 HF 下载超时。可用环境变量覆盖；生产/PR 环境共用、按 HEAD 天然隔离 |
 | `LLAMA_CMAKE_KNOBS` | 上表 10 个构建变量名 | 构建旋钮表：build.sh 按此表循环生成 cmake `-D` 透传参数 |
 **使用示例：**
 

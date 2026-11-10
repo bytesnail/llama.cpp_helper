@@ -297,7 +297,7 @@ load test_helper
 @test "config.sh derives default UI cache dir next to the source repo" {
     unset LLAMA_UI_ASSET_CACHE_DIR
     _load_build
-    [[ "$LLAMA_UI_ASSET_CACHE_DIR" == "${LLAMA_CPP_SRC%/*}/.llama-helper-cache/ui-assets" ]]
+    [[ "$LLAMA_UI_ASSET_CACHE_DIR" == "${LLAMA_CPP_SRC%/*}/.cache/llama_cpp_helper/ui-assets" ]]
 }
 
 @test "config.sh strips trailing slash from LLAMA_CPP_SRC for UI cache derivation" {
@@ -309,5 +309,5 @@ load test_helper
         printf '%s' \"\$LLAMA_UI_ASSET_CACHE_DIR\"
     "
     [ "$status" -eq 0 ]
-    [ "$output" = "/opt/tools/.llama-helper-cache/ui-assets" ]
+    [ "$output" = "/opt/tools/.cache/llama_cpp_helper/ui-assets" ]
 }

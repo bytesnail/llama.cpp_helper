@@ -41,7 +41,7 @@ BUILD_STAMP="${BUILD_STAMP:-${BUILD_DIR}/.build-stamp}"
 # 先剥尾随斜杠再取父目录：`${VAR%/*}` 对 "/a/b/" 会得到 "/a/b"（缓存目录
 # 落进源码仓库内部，成为仓库里的未跟踪目录）。
 _llama_ui_cache_src="${LLAMA_CPP_SRC%/}"
-LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${_llama_ui_cache_src%/*}/.llama-helper-cache/ui-assets}"
+LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${_llama_ui_cache_src%/*}/.cache/llama_cpp_helper/ui-assets}"
 unset _llama_ui_cache_src
 
 # --- 仓库信息 ------------------------------------------------
