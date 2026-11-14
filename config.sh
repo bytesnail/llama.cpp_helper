@@ -36,13 +36,13 @@ BUILD_STAMP="${BUILD_STAMP:-${BUILD_DIR}/.build-stamp}"
 # 下载。动机：us.aws.cdn.hf.co（xet CDN）直连劣化是链路常态（见
 # system-config docs/network/hfd-aria2c-process-rule-rootcause.md），3.1MB
 # 的 dist.tar.gz 单流下载必超时，llama-server 会静默缺失内嵌 Web UI。
-# 默认放在源码仓库的同级目录（不随 update.sh 清理 build 目录而丢失，
-# 生产/PR 环境共用一份、按各自 HEAD 天然隔离）。
-# 先剥尾随斜杠再取父目录：`${VAR%/*}` 对 "/a/b/" 会得到 "/a/b"（缓存目录
-# 落进源码仓库内部，成为仓库里的未跟踪目录）。
-_llama_ui_cache_src="${LLAMA_CPP_SRC%/}"
-LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${_llama_ui_cache_src%/*}/.cache/llama_cpp_helper/ui-assets}"
-unset _llama_ui_cache_src
+# 默认锚定本项目根（从 config.sh 自身位置派生，与 LLAMA_CPP_SRC 布局
+# 无关）：生产/PR 环境共用一份（pr_env.sh 注入隔离源码路径也不改变缓存
+# 位置）、按源码 HEAD 天然隔离、不随 update.sh 清理 build 目录而丢失。
+# 项目内未跟踪目录由 .gitignore 屏蔽（注意 git clean -xfd 仍会删，见 README）。
+_llama_config_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+LLAMA_UI_ASSET_CACHE_DIR="${LLAMA_UI_ASSET_CACHE_DIR:-${_llama_config_dir}/.cache/ui-assets}"
+unset _llama_config_dir
 
 # --- 仓库信息 ------------------------------------------------
 REPO="ggml-org/llama.cpp"

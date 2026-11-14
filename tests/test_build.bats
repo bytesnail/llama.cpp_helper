@@ -294,20 +294,24 @@ load test_helper
     [[ -z "$output" ]]
 }
 
-@test "config.sh derives default UI cache dir next to the source repo" {
+@test "config.sh derives default UI cache dir inside the helper repo" {
     unset LLAMA_UI_ASSET_CACHE_DIR
     _load_build
-    [[ "$LLAMA_UI_ASSET_CACHE_DIR" == "${LLAMA_CPP_SRC%/*}/.cache/llama_cpp_helper/ui-assets" ]]
+    local helper_root
+    helper_root="$(cd "${BATS_TEST_DIRNAME}/.." >/dev/null && pwd)"
+    [[ "$LLAMA_UI_ASSET_CACHE_DIR" == "${helper_root}/.cache/ui-assets" ]]
 }
 
-@test "config.sh strips trailing slash from LLAMA_CPP_SRC for UI cache derivation" {
-    # 回归：`${LLAMA_CPP_SRC%/*}` 对 "/a/b/" 得到 "/a/b"，缓存目录会落进
-    # 源码仓库内部——先剥尾随斜杠再取父目录
+@test "config.sh UI cache default anchors to helper repo, ignoring LLAMA_CPP_SRC" {
+    # 迁移回归：默认目录锚定本项目根，不随 LLAMA_CPP_SRC（指向别处、含
+    # 尾随斜杠）变化——PR 环境注入隔离源码路径仍共用同一份缓存
     run bash -c "
         LLAMA_CPP_SRC='/opt/tools/llama.cpp/'
         source '${BATS_TEST_DIRNAME}/../config.sh' 2>/dev/null
         printf '%s' \"\$LLAMA_UI_ASSET_CACHE_DIR\"
     "
     [ "$status" -eq 0 ]
-    [ "$output" = "/opt/tools/.cache/llama_cpp_helper/ui-assets" ]
+    local expected
+    expected="$(cd "${BATS_TEST_DIRNAME}/.." >/dev/null && pwd)/.cache/ui-assets"
+    [ "$output" = "$expected" ]
 }

@@ -1,5 +1,6 @@
 .sisyphus/
 .omo/
+.cache/
 
 *.swp
 *.swo
