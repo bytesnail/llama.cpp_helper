@@ -1,0 +1,5 @@
+# UI 资产缓存（按源码 HEAD 键控的快照）— 运行时产物，不入库。
+# 忽略本目录下除本文件外的一切；git clean -xfd 会删快照但保留本骨架
+#（内层自管理忽略，与 .codegraph/.gitignore 同款，见 AGENTS.md）。
+*
+!.gitignore
